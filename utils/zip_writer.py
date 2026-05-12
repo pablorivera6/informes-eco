@@ -311,6 +311,62 @@ class XlsxZipWriter:
         xml = _set_cell_number(xml, ref, current + delta)
         self._save_sheet_xml(sheet, xml)
 
+    def extend_curva_s(self, sheet: str, target_date_col: int):
+        """
+        Extiende las filas 8 (Avance Acumulado) y 9 (Avance diario) en C.Control
+        desde la última columna con fórmula hasta target_date_col, inclusive.
+
+        Fila 9: SUMPRODUCT({col}15:{col}128,$G$15:$G$128)/$I$13  [s=347]
+        Fila 8: {col}9+{prev_col}8                               [s=356]
+        """
+        from openpyxl.utils import get_column_letter, column_index_from_string
+
+        xml = self._get_sheet_xml(sheet)
+
+        # Encontrar la última columna con fórmula en fila 9
+        row9_m = re.search(r'<row r="9"[^>]*>(.*?)</row>', xml, re.DOTALL)
+        if not row9_m:
+            return
+
+        # Todas las referencias de columna que tienen contenido en fila 9
+        cols_in_row9 = [
+            column_index_from_string(m.group(1))
+            for m in re.finditer(r'<c r="([A-Z]+)9"', row9_m.group(1))
+        ]
+        last_col = max(cols_in_row9) if cols_in_row9 else 16  # P = col 16 mínimo
+
+        if last_col >= target_date_col:
+            return  # Ya llega hasta la fecha o más allá
+
+        # Agregar fórmulas para cada columna faltante
+        for col in range(last_col + 1, target_date_col + 1):
+            col_ltr  = get_column_letter(col)
+            prev_ltr = get_column_letter(col - 1)
+
+            # Fila 9: avance diario
+            f9  = f"SUMPRODUCT({col_ltr}15:{col_ltr}128,$G$15:$G$128)/$I$13"
+            ref9 = f"{col_ltr}9"
+            result9 = _find_cell(xml, ref9)
+            if result9:
+                m9, attrs9, _, _ = result9
+                replacement9 = f'<c r="{ref9}"{attrs9}><f>{f9}</f></c>'
+                xml = xml[:m9.start()] + replacement9 + xml[m9.end():]
+            else:
+                xml = _insert_cell(xml, ref9, f"<f>{f9}</f>", type_attr=' s="347"')
+
+            # Fila 8: avance acumulado
+            f8  = f"{col_ltr}9+{prev_ltr}8"
+            ref8 = f"{col_ltr}8"
+            result8 = _find_cell(xml, ref8)
+            if result8:
+                m8, attrs8, _, _ = result8
+                replacement8 = f'<c r="{ref8}"{attrs8}><f>{f8}</f></c>'
+                xml = xml[:m8.start()] + replacement8 + xml[m8.end():]
+            else:
+                xml = _insert_cell(xml, ref8, f"<f>{f8}</f>", type_attr=' s="356"')
+
+        self._save_sheet_xml(sheet, xml)
+
     def save(self) -> bytes:
         output = io.BytesIO()
         with zipfile.ZipFile(io.BytesIO(self._original), "r") as zin:

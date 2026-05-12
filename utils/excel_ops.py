@@ -146,13 +146,17 @@ def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) 
             w.set_text("HSE", hse_log_row, 15, form_data["charla_diaria"])
 
     # ── C.Control ────────────────────────────────────────────────────────────
-    if target_date and item_quantities:
+    if target_date:
         date_col = w.find_date_col("C.Control", target_date)
         if date_col:
-            for iq in item_quantities:
+            # Escribir cantidades de ítems
+            for iq in (item_quantities or []):
                 qty = iq.get("cantidad_final", 0) or 0
                 if qty > 0:
                     w.add_to_number("C.Control", iq["row_num"], date_col, qty)
+
+            # Extender filas 8 y 9 (Curva S) hasta la fecha del informe
+            w.extend_curva_s("C.Control", date_col)
 
     return w.save()
 
