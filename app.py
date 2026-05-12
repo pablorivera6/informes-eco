@@ -584,15 +584,15 @@ with nc2:
 st.markdown('<div class="sub-label">Personal en campo y recursos</div>', unsafe_allow_html=True)
 pc1, pc2, pc3, pc4 = st.columns(4, gap="medium")
 with pc1:
-    cal_region    = st.number_input("Calificado — Región",       min_value=0, value=0, step=1)
-    no_cal_region = st.number_input("No calificado — Región",    min_value=0, value=0, step=1)
+    cal_region    = st.number_input("Calificado — Región",       min_value=0, value=1, step=1)
+    no_cal_region = st.number_input("No calificado — Región",    min_value=0, value=2, step=1)
 with pc2:
-    cal_no_region    = st.number_input("Calificado — Fuera región",    min_value=0, value=0, step=1)
+    cal_no_region    = st.number_input("Calificado — Fuera región",    min_value=0, value=7, step=1)
     no_cal_no_region = st.number_input("No calificado — Fuera región", min_value=0, value=0, step=1)
 with pc3:
-    maquinaria = st.number_input("Maquinaria (und.)", min_value=0, value=0, step=1)
+    maquinaria = st.number_input("Maquinaria (und.)", min_value=0, value=1, step=1)
 with pc4:
-    equipo = st.number_input("Equipo (und.)", min_value=0, value=0, step=1)
+    equipo = st.number_input("Equipo (und.)", min_value=0, value=1, step=1)
 
 hh_dia = st.number_input(
     "HH registradas en el día",
