@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from utils.fastfield import parse_submission
+from utils.fastfield_api import download_submission_photos
 from utils.excel_ops import (
     find_date_column,
     read_c_control_items,
@@ -446,7 +447,7 @@ st.markdown(f"""
 # ── Session state ─────────────────────────────────────────────────────────────
 for key, default in [
     ("ff_data", None), ("report_wb", None),
-    ("report_bytes", None), ("report_items", []),
+    ("report_bytes", None), ("report_items", []), ("ff_photos", []),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -474,13 +475,36 @@ with col_a:
     )
     if ff_file:
         try:
-            st.session_state.ff_data = parse_submission(io.BytesIO(ff_file.read()))
+            ff_bytes = ff_file.read()
+            st.session_state.ff_data = parse_submission(io.BytesIO(ff_bytes))
             fd = st.session_state.ff_data
-            st.markdown(
-                f'<div class="pill pill-ok"><span class="pill-dot"></span>'
-                f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; {fd.get("locacion")}</div>',
-                unsafe_allow_html=True,
-            )
+
+            # Descargar fotos desde FastField API si hay credenciales configuradas
+            photo_filenames = [p["filename"] for p in fd.get("fotos", [])]
+            ff_email    = st.secrets.get("fastfield_email", "")
+            ff_password = st.secrets.get("fastfield_password", "")
+            ff_org_id   = st.secrets.get("fastfield_org_id", "")
+
+            if photo_filenames and ff_email and ff_password:
+                with st.spinner(f"Descargando {len(photo_filenames)} foto(s) desde FastField..."):
+                    photo_bytes_list = download_submission_photos(
+                        photo_filenames, ff_email, ff_password, ff_org_id
+                    )
+                st.session_state.ff_photos = photo_bytes_list
+                n_ok = sum(1 for b in photo_bytes_list if b)
+                st.markdown(
+                    f'<div class="pill pill-ok"><span class="pill-dot"></span>'
+                    f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; '
+                    f'{fd.get("locacion")} &nbsp;·&nbsp; {n_ok}/{len(photo_filenames)} fotos descargadas</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.session_state.ff_photos = []
+                st.markdown(
+                    f'<div class="pill pill-ok"><span class="pill-dot"></span>'
+                    f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; {fd.get("locacion")}</div>',
+                    unsafe_allow_html=True,
+                )
         except Exception as e:
             st.markdown(
                 f'<div class="pill pill-err"><span class="pill-dot"></span>Error: {e}</div>',
@@ -621,7 +645,22 @@ st.markdown(
 )
 
 fotos_data = []
-FOTO_SLOTS = 6
+FOTO_SLOTS  = 6
+ff_photos   = st.session_state.ff_photos   # fotos descargadas automáticamente
+auto_loaded = any(b for b in ff_photos if b)
+
+if auto_loaded:
+    st.markdown(
+        f'<div class="pill pill-ok" style="margin-bottom:12px;"><span class="pill-dot"></span>'
+        f'Fotos cargadas automáticamente desde FastField. Solo edita la descripción de cada una.</div>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        '<p style="font-size:13px;color:#6E7681;margin:0 0 16px;">Carga las fotos '
+        'descargadas de FastField. La fecha y ubicación se llenan automáticamente.</p>',
+        unsafe_allow_html=True,
+    )
 
 for row_idx in range(0, FOTO_SLOTS, 2):
     fc1, fc2 = st.columns(2, gap="large")
@@ -631,23 +670,34 @@ for row_idx in range(0, FOTO_SLOTS, 2):
             break
         with fc:
             st.markdown(f'<div class="sub-label">Foto {slot}</div>', unsafe_allow_html=True)
-            img_file = st.file_uploader(
-                f"Foto {slot}",
-                type=["jpg", "jpeg", "png"],
-                key=f"foto_{slot}",
-                label_visibility="collapsed",
-            )
-            if img_file:
-                img_bytes = img_file.read()
-                st.image(img_bytes, use_container_width=True)
+
+            # Foto auto-descargada desde FastField (si existe)
+            auto_bytes = ff_photos[slot - 1] if slot - 1 < len(ff_photos) else None
+
+            if auto_bytes:
+                # Mostrar foto automática — solo descripción es editable
+                st.image(auto_bytes, use_container_width=True)
+                img_bytes = auto_bytes
             else:
-                img_bytes = None
-                st.markdown(
-                    '<div style="height:140px;background:#161B22;border:1px dashed #30363D;'
-                    'border-radius:8px;display:flex;align-items:center;justify-content:center;'
-                    'color:#484F58;font-size:12px;">Sin foto</div>',
-                    unsafe_allow_html=True,
+                # No hay foto automática — permitir carga manual
+                img_file = st.file_uploader(
+                    f"Foto {slot}",
+                    type=["jpg", "jpeg", "png"],
+                    key=f"foto_{slot}",
+                    label_visibility="collapsed",
                 )
+                if img_file:
+                    img_bytes = img_file.read()
+                    st.image(img_bytes, use_container_width=True)
+                else:
+                    img_bytes = None
+                    st.markdown(
+                        '<div style="height:140px;background:#161B22;border:1px dashed #30363D;'
+                        'border-radius:8px;display:flex;align-items:center;justify-content:center;'
+                        'color:#484F58;font-size:12px;">Sin foto</div>',
+                        unsafe_allow_html=True,
+                    )
+
             desc = st.text_input(
                 "Descripción",
                 value="",
