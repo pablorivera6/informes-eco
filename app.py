@@ -557,13 +557,23 @@ charla_diaria = st.text_input("Charla diaria", value=ff.get("charla_diaria", "")
 
 st.markdown('<div class="sub-label">Narrativas de avance</div>', unsafe_allow_html=True)
 loc_label = ff.get("locacion", "Locación")
+
+# Texto HSE con plantilla fija — solo cambia la charla del día
+_charla = ff.get("charla_diaria", "").strip() or "Las reglas que salvan vidas de Ecopetrol"
+_hse_default = (
+    "Aseguramiento del área: Inspección y adecuación de las condiciones de seguridad en el entorno de trabajo.\n\n"
+    f"Charla pre-operacional: {_charla}\n\n"
+    "Gestión HSE: Actualización y cumplimiento de los lineamientos establecidos en el plan de Salud, Seguridad y Ambiente.\n\n"
+    "Trámites administrativos: Gestión y validación de permisos de trabajo para el inicio de actividades."
+)
+
 nc1, nc2 = st.columns(2, gap="medium")
 with nc1:
     avance_cusiana = st.text_area(
         f"Avance relevante — {loc_label}", value=ff.get("avance_items_texto", ""), height=160,
     )
     avance_hse = st.text_area(
-        f"Actividades HSE — {loc_label}", value=ff.get("avance_hse", ""), height=120,
+        f"Actividades HSE — {loc_label}", value=_hse_default, height=180,
     )
 with nc2:
     administrativo = st.text_area(
