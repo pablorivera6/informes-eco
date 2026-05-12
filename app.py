@@ -608,6 +608,58 @@ st.markdown("""
 <div class="step-hdr">
     <div><span class="step-num">03</span></div>
     <div>
+        <div class="step-title">Registro fotográfico</div>
+        <div class="step-desc">Hasta 6 fotos — solo edita la descripción de cada una</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown(
+    '<p style="font-size:13px;color:#6E7681;margin:0 0 16px;">Carga las fotos descargadas de FastField. '
+    'La fecha y ubicación se llenan automáticamente.</p>',
+    unsafe_allow_html=True,
+)
+
+fotos_data = []
+FOTO_SLOTS = 6
+
+for row_idx in range(0, FOTO_SLOTS, 2):
+    fc1, fc2 = st.columns(2, gap="large")
+    for col_idx, fc in enumerate([fc1, fc2]):
+        slot = row_idx + col_idx + 1
+        if slot > FOTO_SLOTS:
+            break
+        with fc:
+            st.markdown(f'<div class="sub-label">Foto {slot}</div>', unsafe_allow_html=True)
+            img_file = st.file_uploader(
+                f"Foto {slot}",
+                type=["jpg", "jpeg", "png"],
+                key=f"foto_{slot}",
+                label_visibility="collapsed",
+            )
+            if img_file:
+                img_bytes = img_file.read()
+                st.image(img_bytes, use_container_width=True)
+            else:
+                img_bytes = None
+                st.markdown(
+                    '<div style="height:140px;background:#161B22;border:1px dashed #30363D;'
+                    'border-radius:8px;display:flex;align-items:center;justify-content:center;'
+                    'color:#484F58;font-size:12px;">Sin foto</div>',
+                    unsafe_allow_html=True,
+                )
+            desc = st.text_input(
+                "Descripción",
+                value="",
+                placeholder="Ej: Caja de cabezal de Pozo CPR 003",
+                key=f"desc_{slot}",
+            )
+            fotos_data.append({"image_bytes": img_bytes, "descripcion": desc})
+
+st.markdown("""
+<div class="step-hdr">
+    <div><span class="step-num">04</span></div>
+    <div>
         <div class="step-title">Indicadores HSE</div>
         <div class="step-desc">Eventos de seguridad y salud registrados durante el día</div>
     </div>
@@ -629,11 +681,11 @@ with h3:
     hse_visitas    = st.number_input("Visitas gerenciales",              min_value=0, value=0)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PASO 4 — Avance por ítems
+# PASO 5 — Avance por ítems
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="step-hdr">
-    <div><span class="step-num">04</span></div>
+    <div><span class="step-num">05</span></div>
     <div>
         <div class="step-title">Avance por ítems</div>
         <div class="step-desc">Cantidades ejecutadas hoy para actualizar la Curva S en C.Control</div>
@@ -830,7 +882,7 @@ for section in sections:
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="step-hdr">
-    <div><span class="step-num">05</span></div>
+    <div><span class="step-num">06</span></div>
     <div>
         <div class="step-title">Generar informe</div>
         <div class="step-desc">Revisa el resumen y descarga el Excel listo para enviar a Ecopetrol</div>
@@ -890,6 +942,8 @@ if generar:
         "hse_fallas_ctrl":                  int(hse_fallas),
         "hse_aseguramiento":                int(hse_aseguramto),
         "hse_visitas_ger":                  int(hse_visitas),
+        "fotos":                            fotos_data,
+        "locacion_display":                 locacion_display,
     }
 
     with st.spinner("Generando informe..."):

@@ -247,6 +247,8 @@ class XlsxZipWriter:
 
         # path → modified xml string (start as None = unchanged)
         self._modified_sheets: dict[str, str] = {}
+        # path → modified binary (media files)
+        self._modified_media: dict[str, bytes] = {}
 
     def _get_sheet_xml(self, sheet_name: str) -> str:
         path = self._sheet_map[sheet_name]
@@ -367,6 +369,18 @@ class XlsxZipWriter:
 
         self._save_sheet_xml(sheet, xml)
 
+    def replace_photo(self, slot: int, image_bytes: bytes):
+        """
+        Reemplaza una foto en el registro fotográfico de Resumen.
+        slot: 1-6 → xl/media/image4.png a image9.png
+        Convierte cualquier formato a PNG para compatibilidad.
+        """
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(image_bytes))
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        self._modified_media[f"xl/media/image{slot + 3}.png"] = buf.getvalue()
+
     def save(self) -> bytes:
         output = io.BytesIO()
         with zipfile.ZipFile(io.BytesIO(self._original), "r") as zin:
@@ -376,6 +390,8 @@ class XlsxZipWriter:
                         data = self._ss_xml.encode("utf-8")
                     elif item.filename in self._modified_sheets:
                         data = self._modified_sheets[item.filename].encode("utf-8")
+                    elif item.filename in self._modified_media:
+                        data = self._modified_media[item.filename]
                     else:
                         data = zin.read(item.filename)
                     zout.writestr(item, data)

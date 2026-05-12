@@ -79,6 +79,17 @@ def find_date_column(wb, target_date) -> int | None:
 
 # ── Report writing ────────────────────────────────────────────────────────────
 
+# Celdas de descripción fotográfica en Resumen: (fila, col) por slot 1-6
+_PHOTO_DESC_CELLS = [
+    (32, 2),   # Foto 1 — izquierda
+    (32, 17),  # Foto 2 — derecha
+    (34, 2),   # Foto 3 — izquierda
+    (34, 17),  # Foto 4 — derecha
+    (36, 2),   # Foto 5 — izquierda
+    (36, 17),  # Foto 6 — derecha
+]
+
+
 def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) -> bytes:
     """
     Write cell values into the XLSX using direct ZIP manipulation.
@@ -158,7 +169,32 @@ def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) 
             # Extender filas 8 y 9 (Curva S) hasta la fecha del informe
             w.extend_curva_s("C.Control", date_col)
 
+    # ── Fotos ──────────────────────────────────────────────────────────────────
+    _update_fotos(w, form_data)
+
     return w.save()
+
+
+def _update_fotos(w, form_data: dict):
+    """Escribe descripciones y reemplaza imágenes del registro fotográfico."""
+    fotos = form_data.get("fotos", [])  # lista de {descripcion, image_bytes}
+    fecha_str = ""
+    if form_data.get("fecha_informe"):
+        d = form_data["fecha_informe"]
+        fecha_str = f"{d.day:02d}/{d.month:02d}/{d.year}"
+    locacion = form_data.get("locacion_display", "Cusiana")
+
+    for idx, (row, col) in enumerate(_PHOTO_DESC_CELLS):
+        if idx >= len(fotos):
+            break
+        foto = fotos[idx]
+        desc = foto.get("descripcion", "").strip()
+        texto = f"Fecha: {fecha_str}\nUbicación: {locacion}\nDescripción: {desc}"
+        w.set_text("Resumen", row, col, texto)
+
+        img_bytes = foto.get("image_bytes")
+        if img_bytes:
+            w.replace_photo(idx + 1, img_bytes)  # slots 1-6
 
 
 def _set_if(sheet, row, col, key, writer, form_data):
