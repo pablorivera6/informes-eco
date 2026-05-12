@@ -518,6 +518,30 @@ with col_a:
                 unsafe_allow_html=True,
             )
 
+with st.expander("Diagnostico API FastField", expanded=False):
+    _sk_raw = st.secrets.get("fastfield_subscription_key", "")
+    _sk = _sk_raw.strip()
+    st.code(f"sub_key  len={len(_sk_raw)} stripped_len={len(_sk)}\nfirst_10={_sk[:10] if _sk else 'VACIO'}\nlast_4={_sk[-4:] if _sk else 'VACIO'}")
+    if st.button("Probar autenticacion"):
+        import base64 as _b64, requests as _rq
+        _em = st.secrets.get("fastfield_email", "")
+        _pw = st.secrets.get("fastfield_password", "")
+        _org = st.secrets.get("fastfield_org_id", "")
+        _tok = _b64.b64encode(f"{_em}:{_pw}".encode()).decode()
+        _hdr = {"Authorization": f"Basic {_tok}", "Ocp-Apim-Subscription-Key": _sk}
+        if _org:
+            _hdr["X-Gatekeeper-OrgId"] = _org
+        _params = {"subscription-key": _sk} if _sk else {}
+        _r = _rq.post("https://api.fastfieldforms.com/services/v3/authenticate",
+                      headers=_hdr, params=_params, timeout=20)
+        st.write(f"**Status:** {_r.status_code}")
+        st.write(f"**URL enviada:** `{_r.request.url}`")
+        st.write("**Headers enviados:**")
+        st.json({k: (v[:6] + "..." if k == "Authorization" else v)
+                 for k, v in _r.request.headers.items()})
+        st.write("**Respuesta:**")
+        st.code(_r.text[:800])
+
 with col_b:
     st.markdown('<div class="upload-label">Reporte formal (plantilla)</div>', unsafe_allow_html=True)
     st.markdown('<div class="upload-desc">Último reporte enviado a Ecopetrol (.xlsx)</div>', unsafe_allow_html=True)
