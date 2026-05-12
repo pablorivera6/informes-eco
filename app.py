@@ -559,10 +559,11 @@ st.markdown('<div class="sub-label">Narrativas de avance</div>', unsafe_allow_ht
 loc_label = ff.get("locacion", "Locación")
 
 # Texto HSE con plantilla fija — solo cambia la charla del día
-_charla = ff.get("charla_diaria", "").strip() or "Las reglas que salvan vidas de Ecopetrol"
+_charla = ff.get("charla_diaria", "").strip()
+_charla_linea = f"Charla pre-operacional: {_charla}" if _charla else "Charla pre-operacional:"
 _hse_default = (
     "Aseguramiento del área: Inspección y adecuación de las condiciones de seguridad en el entorno de trabajo.\n\n"
-    f"Charla pre-operacional: {_charla}\n\n"
+    f"{_charla_linea}\n\n"
     "Gestión HSE: Actualización y cumplimiento de los lineamientos establecidos en el plan de Salud, Seguridad y Ambiente.\n\n"
     "Trámites administrativos: Gestión y validación de permisos de trabajo para el inicio de actividades."
 )
