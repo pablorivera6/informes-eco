@@ -487,17 +487,24 @@ with col_a:
 
             if photo_filenames and ff_email and ff_password:
                 with st.spinner(f"Descargando {len(photo_filenames)} foto(s) desde FastField..."):
-                    photo_bytes_list = download_submission_photos(
+                    photo_bytes_list, api_err = download_submission_photos(
                         photo_filenames, ff_email, ff_password, ff_org_id
                     )
                 st.session_state.ff_photos = photo_bytes_list
                 n_ok = sum(1 for b in photo_bytes_list if b)
-                st.markdown(
-                    f'<div class="pill pill-ok"><span class="pill-dot"></span>'
-                    f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; '
-                    f'{fd.get("locacion")} &nbsp;·&nbsp; {n_ok}/{len(photo_filenames)} fotos descargadas</div>',
-                    unsafe_allow_html=True,
-                )
+                if n_ok > 0:
+                    st.markdown(
+                        f'<div class="pill pill-ok"><span class="pill-dot"></span>'
+                        f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; '
+                        f'{fd.get("locacion")} &nbsp;·&nbsp; {n_ok}/{len(photo_filenames)} fotos descargadas</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div class="pill pill-warn"><span class="pill-dot"></span>'
+                        f'Cargado &mdash; fotos no descargadas. Error: <code>{api_err}</code></div>',
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.session_state.ff_photos = []
                 st.markdown(

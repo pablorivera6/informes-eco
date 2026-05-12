@@ -67,17 +67,26 @@ def get_photo_bytes(filename: str, session_token: str) -> bytes | None:
 def download_submission_photos(photo_filenames: list[str],
                                email: str,
                                password: str,
-                               org_id: str = "") -> list[bytes | None]:
+                               org_id: str = "") -> tuple[list[bytes | None], str]:
     """
     Descarga todas las fotos de un submission.
-    Retorna lista de bytes (o None si falló) en el mismo orden.
+    Retorna (lista_de_bytes, mensaje_de_error).
     """
     if not photo_filenames:
-        return []
+        return [], ""
 
     try:
         token = authenticate(email, password, org_id)
-    except RuntimeError:
-        return [None] * len(photo_filenames)
+    except RuntimeError as e:
+        return [None] * len(photo_filenames), str(e)
 
-    return [get_photo_bytes(fn, token) for fn in photo_filenames]
+    results = []
+    errors  = []
+    for fn in photo_filenames:
+        b = get_photo_bytes(fn, token)
+        results.append(b)
+        if b is None:
+            errors.append(fn)
+
+    err_msg = f"{len(errors)} foto(s) no descargadas: {errors[:2]}" if errors else ""
+    return results, err_msg
