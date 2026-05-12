@@ -20,29 +20,45 @@ def _basic_auth_header(email: str, password: str) -> str:
     return f"Basic {token}"
 
 
-def authenticate(email: str, password: str, org_id: str = "") -> str:
+def _base_headers(subscription_key: str) -> dict:
+    """Headers comunes para todas las llamadas a la API."""
+    h = {}
+    if subscription_key:
+        h["Ocp-Apim-Subscription-Key"] = subscription_key
+    return h
+
+
+def authenticate(email: str, password: str,
+                 org_id: str = "", subscription_key: str = "") -> str:
     """
     Autentica con FastField y retorna el sessionToken.
     Lanza RuntimeError si falla.
     """
-    headers = {"Authorization": _basic_auth_header(email, password)}
+    headers = {
+        **_base_headers(subscription_key),
+        "Authorization": _basic_auth_header(email, password),
+    }
     if org_id:
         headers["X-Gatekeeper-OrgId"] = org_id
 
     resp = requests.post(f"{BASE_URL}/authenticate", headers=headers, timeout=TIMEOUT)
     if resp.status_code != 200:
-        raise RuntimeError(f"FastField auth falló ({resp.status_code}): {resp.text[:200]}")
+        raise RuntimeError(f"FastField auth falló ({resp.status_code}): {resp.text[:300]}")
 
     return resp.json()["sessionToken"]
 
 
-def get_photo_bytes(filename: str, session_token: str) -> bytes | None:
+def get_photo_bytes(filename: str, session_token: str,
+                    subscription_key: str = "") -> bytes | None:
     """
     Dado el nombre de archivo de una foto (de multiphoto_picker_1),
     devuelve los bytes de la imagen o None si no se puede descargar.
     """
     # Paso 1: obtener URL autenticada de descarga
-    headers = {"X-Gatekeeper-SessionToken": session_token}
+    headers = {
+        **_base_headers(subscription_key),
+        "X-Gatekeeper-SessionToken": session_token,
+    }
     resp = requests.get(
         f"{BASE_URL}/media/download",
         params={"key": filename},
@@ -67,7 +83,8 @@ def get_photo_bytes(filename: str, session_token: str) -> bytes | None:
 def download_submission_photos(photo_filenames: list[str],
                                email: str,
                                password: str,
-                               org_id: str = "") -> tuple[list[bytes | None], str]:
+                               org_id: str = "",
+                               subscription_key: str = "") -> tuple[list[bytes | None], str]:
     """
     Descarga todas las fotos de un submission.
     Retorna (lista_de_bytes, mensaje_de_error).
@@ -76,14 +93,14 @@ def download_submission_photos(photo_filenames: list[str],
         return [], ""
 
     try:
-        token = authenticate(email, password, org_id)
+        token = authenticate(email, password, org_id, subscription_key)
     except RuntimeError as e:
         return [None] * len(photo_filenames), str(e)
 
     results = []
     errors  = []
     for fn in photo_filenames:
-        b = get_photo_bytes(fn, token)
+        b = get_photo_bytes(fn, token, subscription_key)
         results.append(b)
         if b is None:
             errors.append(fn)

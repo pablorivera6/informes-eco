@@ -484,11 +484,12 @@ with col_a:
             ff_email    = st.secrets.get("fastfield_email", "")
             ff_password = st.secrets.get("fastfield_password", "")
             ff_org_id   = st.secrets.get("fastfield_org_id", "")
+            ff_sub_key  = st.secrets.get("fastfield_subscription_key", "")
 
             if photo_filenames and ff_email and ff_password:
                 with st.spinner(f"Descargando {len(photo_filenames)} foto(s) desde FastField..."):
                     photo_bytes_list, api_err = download_submission_photos(
-                        photo_filenames, ff_email, ff_password, ff_org_id
+                        photo_filenames, ff_email, ff_password, ff_org_id, ff_sub_key
                     )
                 st.session_state.ff_photos = photo_bytes_list
                 n_ok = sum(1 for b in photo_bytes_list if b)
