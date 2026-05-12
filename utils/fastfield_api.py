@@ -20,17 +20,12 @@ def _basic_auth_header(email: str, password: str) -> str:
     return f"Basic {token}"
 
 
-def _base_headers(subscription_key: str) -> dict:
+def _base_headers(api_key: str) -> dict:
     """Headers comunes para todas las llamadas a la API."""
-    h = {}
-    if subscription_key:
-        h["Ocp-Apim-Subscription-Key"] = subscription_key
+    h = {"Cache-Control": "no-cache"}
+    if api_key:
+        h["FastField-API-Key"] = api_key
     return h
-
-
-def _sub_key_params(subscription_key: str) -> dict:
-    """Azure API Management also accepts the key as a query param."""
-    return {"subscription-key": subscription_key} if subscription_key else {}
 
 
 def authenticate(email: str, password: str,
@@ -46,12 +41,7 @@ def authenticate(email: str, password: str,
     if org_id:
         headers["X-Gatekeeper-OrgId"] = org_id
 
-    resp = requests.post(
-        f"{BASE_URL}/authenticate",
-        headers=headers,
-        params=_sub_key_params(subscription_key),
-        timeout=TIMEOUT,
-    )
+    resp = requests.post(f"{BASE_URL}/authenticate", headers=headers, timeout=TIMEOUT)
     if resp.status_code != 200:
         raise RuntimeError(f"FastField auth falló ({resp.status_code}): {resp.text[:300]}")
 
@@ -69,10 +59,9 @@ def get_photo_bytes(filename: str, session_token: str,
         **_base_headers(subscription_key),
         "X-Gatekeeper-SessionToken": session_token,
     }
-    params = {"key": filename, **_sub_key_params(subscription_key)}
     resp = requests.get(
         f"{BASE_URL}/media/download",
-        params=params,
+        params={"key": filename},
         headers=headers,
         timeout=TIMEOUT,
     )
