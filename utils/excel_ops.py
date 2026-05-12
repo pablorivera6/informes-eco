@@ -1,0 +1,201 @@
+"""Read and write operations on the formal Ecopetrol report Excel."""
+import copy
+import openpyxl
+from openpyxl.utils import get_column_letter
+from datetime import datetime, date
+
+
+# ── C.Control parsing ────────────────────────────────────────────────────────
+
+def read_c_control_items(wb) -> list[dict]:
+    """Return all contract items from C.Control with their row numbers."""
+    ws = wb["C.Control"]
+    items = []
+    section = "CUSIANA"  # First section (labeled PROYECTO in Excel) = Cusiana
+
+    for row_num in range(11, ws.max_row + 1):
+        col_b = ws.cell(row=row_num, column=2).value
+
+        # Section boundaries detected by col B value
+        if col_b in ("FLORENA", "FLOREÑA"):
+            section = "FLORENA"
+            continue
+        if col_b == "CUPIAGUA":
+            section = "CUPIAGUA"
+            continue
+
+        # Item rows have an integer in col B (item number)
+        if not isinstance(col_b, (int, float)) or col_b != int(col_b):
+            continue
+        item_num = int(col_b)
+
+        especialidad = ws.cell(row=row_num, column=3).value
+        codigo_sap   = ws.cell(row=row_num, column=4).value
+        descripcion  = ws.cell(row=row_num, column=5).value
+        unidad       = ws.cell(row=row_num, column=6).value
+        valor_unit   = ws.cell(row=row_num, column=7).value
+        cantidad_tot = ws.cell(row=row_num, column=8).value
+
+        # ACUMULADO is col L (12) — SUM formula; read cached value
+        acum_cell = ws.cell(row=row_num, column=12)
+        acumulado = None
+        if not str(acum_cell.value or "").startswith("="):
+            acumulado = acum_cell.value
+
+        items.append({
+            "section": section,
+            "item": item_num,
+            "especialidad": especialidad or "",
+            "codigo_sap": str(codigo_sap or ""),
+            "descripcion": descripcion or "",
+            "unidad": unidad or "",
+            "valor_unitario": valor_unit,
+            "cantidad_total": cantidad_tot,
+            "acumulado": acumulado,
+            "row_num": row_num,
+        })
+
+    return items
+
+
+def find_date_column(wb, target_date) -> int | None:
+    """Return the column index in C.Control for a given date (row 1 header)."""
+    ws = wb["C.Control"]
+    if isinstance(target_date, datetime):
+        target_date = target_date.date()
+    elif isinstance(target_date, str):
+        target_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+
+    for col in range(16, ws.max_column + 1):
+        val = ws.cell(row=1, column=col).value
+        if val is None:
+            continue
+        if isinstance(val, datetime) and val.date() == target_date:
+            return col
+        if isinstance(val, date) and val == target_date:
+            return col
+    return None
+
+
+# ── Report writing ────────────────────────────────────────────────────────────
+
+def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) -> bytes:
+    """
+    Write cell values into the XLSX using direct ZIP manipulation.
+    Preserves 100% of original format: charts, images, drawings, VML, styles.
+    """
+    from utils.zip_writer import XlsxZipWriter
+    from io import BytesIO
+
+    if hasattr(template_bytes, "read"):
+        template_bytes = template_bytes.read()
+
+    w = XlsxZipWriter(template_bytes)
+    target_date = form_data.get("fecha_informe")
+
+    # ── Resumen ──────────────────────────────────────────────────────────────
+    if form_data.get("reporte_no") is not None:
+        w.set_number("Resumen", 10, 14, form_data["reporte_no"])        # N10
+    if target_date:
+        w.set_date("Resumen", 10, 19, target_date)                      # S10
+    if form_data.get("charla_diaria"):
+        w.set_text("Resumen", 14, 27, form_data["charla_diaria"])       # AA14
+    if form_data.get("avance_cusiana"):
+        w.set_text("Resumen", 18, 6, form_data["avance_cusiana"])       # F18
+    if form_data.get("administrativo_cusiana"):
+        w.set_text("Resumen", 19, 6, form_data["administrativo_cusiana"])  # F19
+    if form_data.get("avance_hse_cusiana"):
+        w.set_text("Resumen", 20, 6, form_data["avance_hse_cusiana"])   # F20
+
+    _set_if("Resumen", 27,  8, "personal_calificado_region",        w, form_data)  # H27
+    _set_if("Resumen", 27, 10, "personal_calificado_no_region",     w, form_data)  # J27
+    _set_if("Resumen", 28,  8, "personal_no_calificado_region",     w, form_data)  # H28
+    _set_if("Resumen", 28, 10, "personal_no_calificado_no_region",  w, form_data)  # J28
+    _set_if("Resumen", 27, 25, "maquinaria",                        w, form_data)  # Y27
+    _set_if("Resumen", 28, 25, "equipo",                            w, form_data)  # Y28
+
+    # ── HSE ──────────────────────────────────────────────────────────────────
+    if target_date:
+        w.set_date("HSE", 10, 7, target_date)                          # G10
+    if form_data.get("hh_dia") is not None:
+        w.set_number("HSE", 22, 8, form_data["hh_dia"])                # H22
+    if form_data.get("charla_diaria"):
+        w.set_text("HSE", 24, 8, form_data["charla_diaria"])           # H24
+
+    # HSE daily log table (find row for target_date)
+    if target_date:
+        hse_log_row = _find_hse_log_row(w, target_date)
+        _hse_log_map = {
+            "hse_accid_cpt":       3,
+            "hse_accid_spt":       4,
+            "hse_primeros_aux":    5,
+            "hse_derrames":        6,
+            "hse_incid_viales":    7,
+            "hse_casi_accid":      8,
+            "hse_fallas_ctrl":     9,
+            "hse_aseguramiento":  10,
+            "hse_visitas_ger":    11,
+            "hse_alcoholimetrias":12,
+            "hh_dia":             14,
+        }
+        for key, col in _hse_log_map.items():
+            val = form_data.get(key)
+            if val is not None:
+                w.set_number("HSE", hse_log_row, col, int(val) if isinstance(val, float) and val == int(val) else val)
+        if form_data.get("charla_diaria"):
+            w.set_text("HSE", hse_log_row, 15, form_data["charla_diaria"])
+
+    # ── C.Control ────────────────────────────────────────────────────────────
+    if target_date and item_quantities:
+        date_col = w.find_date_col("C.Control", target_date)
+        if date_col:
+            for iq in item_quantities:
+                qty = iq.get("cantidad_final", 0) or 0
+                if qty > 0:
+                    w.add_to_number("C.Control", iq["row_num"], date_col, qty)
+
+    return w.save()
+
+
+def _set_if(sheet, row, col, key, writer, form_data):
+    val = form_data.get(key)
+    if val is not None:
+        writer.set_number(sheet, row, col, val)
+
+
+def _find_hse_log_row(writer, target_date) -> int:
+    """Find HSE log row by searching column B from row 30 for target_date serial."""
+    from utils.zip_writer import to_excel_serial
+    serial = to_excel_serial(target_date)
+
+    xml = writer._get_sheet_xml("HSE")
+    import re
+    # Search for existing date in col B (rows 30+)
+    for m in re.finditer(r'<c r="B(\d+)"[^>]*>.*?<v>(\d+)</v>', xml, re.DOTALL):
+        row_num = int(m.group(1))
+        if row_num < 30:
+            continue
+        if int(m.group(2)) == serial:
+            return row_num
+
+    # Find first empty row in col B starting from row 30
+    existing_rows = set()
+    for m in re.finditer(r'<c r="B(\d+)"', xml):
+        existing_rows.add(int(m.group(1)))
+
+    for r in range(30, 500):
+        if r not in existing_rows:
+            writer.set_date("HSE", r, 2, target_date)  # B col = col 2
+            return r
+
+    return 500  # fallback
+
+
+def read_reporte_no(wb) -> int:
+    """Read current Reporte No. from Resumen."""
+    ws = wb["Resumen"]
+    val = ws.cell(row=10, column=14).value
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
