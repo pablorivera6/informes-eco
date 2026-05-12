@@ -24,52 +24,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Acceso con contraseña ─────────────────────────────────────────────────────
-def _login_screen():
-    st.markdown(f"""
-    <style>
-    .stApp {{ background-color: #0D1117; }}
-    .login-wrap {{
-        max-width: 400px; margin: 80px auto 0;
-        background: #161B22; border: 1px solid #30363D;
-        border-radius: 12px; padding: 40px 36px;
-    }}
-    .login-logo {{ text-align:center; margin-bottom: 28px; }}
-    .login-title {{
-        font-family: 'Lexend', sans-serif; font-size: 18px; font-weight: 600;
-        color: #E6EDF3; text-align: center; margin-bottom: 4px;
-    }}
-    .login-sub {{
-        font-size: 12px; color: #6E7681; text-align: center;
-        margin-bottom: 28px; letter-spacing: 0.4px;
-    }}
-    </style>
-    <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@600&display=swap" rel="stylesheet">
-    <div class="login-wrap">
-        <div class="login-logo">
-            <img src="{LOGO_PCC}" style="height:64px;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.5));">
-        </div>
-        <div class="login-title">Informes Diarios</div>
-        <div class="login-sub">ECOPETROL · CW309754 · Protección Catódica de Colombia</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-def _check_auth() -> bool:
-    if st.session_state.get("_auth"):
-        return True
-    _login_screen()
-    pwd = st.text_input("Contraseña", type="password", placeholder="Ingresa la contraseña de acceso")
-    if st.button("Ingresar", type="primary", use_container_width=True):
-        correct = st.secrets.get("app_password", "")
-        if pwd == correct:
-            st.session_state["_auth"] = True
-            st.rerun()
-        else:
-            st.error("Contraseña incorrecta.")
-    return False
-
-if not _check_auth():
-    st.stop()
 
 # ── Location mapping ──────────────────────────────────────────────────────────
 LOCATION_MAP: dict[str, str] = {
