@@ -485,6 +485,10 @@ with col_a:
             ff_password = st.secrets.get("fastfield_password", "")
             ff_org_id   = st.secrets.get("fastfield_org_id", "")
             ff_sub_key  = st.secrets.get("fastfield_subscription_key", "")
+            # DEBUG temporal — muestra si los secrets están presentes
+            st.caption(f"DEBUG — email: {'OK' if ff_email else 'FALTA'} | "
+                       f"password: {'OK' if ff_password else 'FALTA'} | "
+                       f"sub_key: {'OK ('+ff_sub_key[:6]+\"...\")\" if ff_sub_key else 'FALTA'}")
 
             if photo_filenames and ff_email and ff_password:
                 with st.spinner(f"Descargando {len(photo_filenames)} foto(s) desde FastField..."):
