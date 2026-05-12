@@ -734,7 +734,7 @@ for section in sections:
         for it in section_items:
             acum     = it.get("acumulado") or 0
             has_prev = isinstance(acum, (int, float)) and acum > 0
-            ff_qty   = ff_items_map.get(it["item"]) if it["item"] in ff_items_map else None
+            ff_qty   = ff_items_map.get(it["item"]) if (is_active and it["item"] in ff_items_map) else None
             rows.append({
                 "FF":          "Auto" if ff_qty else ("Prev" if has_prev else ""),
                 "N°":          it["item"],
@@ -752,10 +752,11 @@ for section in sections:
         df   = pd.DataFrame(rows)
         disp = ["FF", "N°", "Esp.", "Descripción", "Und.", "Cant. total", "Acumulado"]
 
-        # Pre-seleccionar ítems que vienen de FastField
-        ff_nums_in_section = [
-            it["item"] for it in section_items if it["item"] in ff_items_map
-        ]
+        # FastField solo aplica a la sección de la locación del día
+        ff_nums_in_section = (
+            [it["item"] for it in section_items if it["item"] in ff_items_map]
+            if is_active else []
+        )
 
         solo_prev = st.checkbox("Solo ítems con avance acumulado previo", key=f"chk_{section}")
         df_show   = df[df["FF"].isin(["Auto", "Prev"])] if solo_prev else df
@@ -766,7 +767,7 @@ for section in sections:
 
         st.dataframe(df_show[disp], use_container_width=True, hide_index=True)
 
-        # Default selection = ítems que vienen de FastField (si los hay)
+        # Pre-selección solo en la sección activa
         default_sel = [n for n in ff_nums_in_section if n in df_show["N°"].tolist()]
         selected = st.multiselect(
             "Ítems ejecutados hoy",
@@ -784,10 +785,10 @@ for section in sections:
             row_num  = item_row["_row_num"]
             conv     = needs_conversion(unidad, desc)
 
-            # Cantidad pre-cargada desde FastField (si existe)
-            ff_entry     = ff_items_map.get(item_no)
-            qty_default  = float(ff_entry["cantidad"]) if ff_entry else 0.0
-            auto_label   = " (FastField)" if ff_entry else ""
+            # Cantidad pre-cargada desde FastField solo si es la sección activa
+            ff_entry    = ff_items_map.get(item_no) if is_active else None
+            qty_default = float(ff_entry["cantidad"]) if ff_entry else 0.0
+            auto_label  = " (FastField)" if ff_entry else ""
 
             st.markdown(
                 f'<div class="item-title">#{item_no} &nbsp;—&nbsp; {desc[:100]}</div>',
