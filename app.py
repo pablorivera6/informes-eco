@@ -863,6 +863,10 @@ with gen_col:
     generar = st.button("Generar informe", type="primary", use_container_width=True)
 
 if generar:
+    # HH total del día = total personas × horas por persona
+    _total_personas = int(cal_region) + int(cal_no_region) + int(no_cal_region) + int(no_cal_no_region)
+    _hh_total = _total_personas * hh_dia
+
     form_data = {
         "fecha_informe":                    fecha_informe,
         "reporte_no":                       int(reporte_no),
@@ -876,7 +880,7 @@ if generar:
         "personal_no_calificado_no_region": int(no_cal_no_region),
         "maquinaria":                       int(maquinaria),
         "equipo":                           int(equipo),
-        "hh_dia":                           hh_dia,
+        "hh_dia":                           _hh_total,   # Total HH del día para la hoja HSE
         "hse_accid_cpt":                    int(hse_accid_cpt),
         "hse_accid_spt":                    int(hse_accid_spt),
         "hse_primeros_aux":                 int(hse_primeros),
