@@ -93,12 +93,9 @@ def _read_item_quantities(wb) -> list[dict]:
     """
     Lee subform_4: ítems de pago con cantidad y unidad.
 
-    Formato de 'Item de pago ':
-        "008 — CONCRETO CLASE D (210 KG/CM2 Ó 3000 PSI)  [M3]"
-        "023 — PERFORACIÓN VERTICAL PARA CAMAS...  [M]"
-
-    Devuelve lista de dicts:
-        {item_num: int, descripcion: str, cantidad: float, unidad: str}
+    Soporta el formato con dimensiones separadas (Cantidad #1 / #2 / #3)
+    donde la cantidad final = producto de las dimensiones no vacías.
+    También es compatible con el formato antiguo de un solo campo 'Cantidad'.
     """
     if "subform_4" not in wb.sheetnames:
         return []
@@ -111,29 +108,48 @@ def _read_item_quantities(wb) -> list[dict]:
         row_dict = dict(zip(headers, row))
 
         raw_item = row_dict.get("Item de pago ") or row_dict.get("Item de pago") or ""
-        cantidad  = row_dict.get("Cantidad")
-        unidad    = row_dict.get("Unidad", "")
+        unidad   = row_dict.get("Unidad", "")
 
-        if not raw_item or cantidad is None:
+        # Nuevo formato: Cantidad #1, #2, #3
+        c1 = _to_float(row_dict.get("Cantidad #1"))
+        c2 = _to_float(row_dict.get("Cantidad #2"))
+        c3 = _to_float(row_dict.get("Cantidad #3"))
+
+        # Compatibilidad con formato antiguo de campo único
+        if c1 is None:
+            c1 = _to_float(row_dict.get("Cantidad"))
+
+        if not raw_item or c1 is None:
             continue
 
         item_num, descripcion = _parse_item_label(str(raw_item))
         if item_num is None:
             continue
 
-        try:
-            cantidad_float = float(cantidad)
-        except (TypeError, ValueError):
-            continue
+        # Multiplicar las dimensiones que vengan llenas
+        cantidad_final = c1
+        if c2 is not None and c2 != 0:
+            cantidad_final *= c2
+        if c3 is not None and c3 != 0:
+            cantidad_final *= c3
 
         items.append({
-            "item_num":   item_num,
+            "item_num":    item_num,
             "descripcion": descripcion,
-            "cantidad":   cantidad_float,
-            "unidad":     str(unidad or "").strip(),
+            "cantidad":    cantidad_final,
+            "unidad":      str(unidad or "").strip(),
         })
 
     return items
+
+
+def _to_float(val) -> float | None:
+    if val is None or val == "":
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_item_label(label: str) -> tuple[int | None, str]:
