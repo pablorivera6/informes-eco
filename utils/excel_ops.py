@@ -172,6 +172,9 @@ def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) 
     # ── Fotos ──────────────────────────────────────────────────────────────────
     _update_fotos(w, form_data)
 
+    # ── Recursos — acumular HH del día en columna F ─────────────────────────
+    w.accumulate_recursos_hh()
+
     return w.save()
 
 

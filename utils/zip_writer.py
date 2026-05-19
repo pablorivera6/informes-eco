@@ -369,6 +369,55 @@ class XlsxZipWriter:
 
         self._save_sheet_xml(sheet, xml)
 
+    def accumulate_recursos_hh(self,
+                               sheet: str = "Recursos",
+                               hh_col: int = 5,    # columna E  → E$11 (Cantidad Horas día)
+                               data_col: int = 6,   # columna F  → CUSIANA acumulado
+                               hh_row: int = 11,
+                               row_start: int = 15,
+                               row_end: int = 46):
+        """
+        Simula copiar la columna fórmula (=F_row+E$11) y pegarla en F.
+        Para cada fila con valor > 0 en columna F, añade E11 (horas del día).
+        """
+        if sheet not in self._sheet_map:
+            return
+        xml = self._get_sheet_xml(sheet)
+
+        # Leer E11 (Cantidad Horas día)
+        e11_ref = _cell_ref(hh_col, hh_row)
+        res = _find_cell(xml, e11_ref)
+        if not res:
+            return
+        v_m = re.search(r"<v>([^<]*)</v>", res[2])
+        if not v_m or not v_m.group(1):
+            return
+        try:
+            daily_hh = float(v_m.group(1))
+        except ValueError:
+            return
+        if daily_hh <= 0:
+            return
+
+        # Sumar daily_hh a cada fila no vacía de columna F
+        for row in range(row_start, row_end + 1):
+            f_ref = _cell_ref(data_col, row)
+            res = _find_cell(xml, f_ref)
+            if not res:
+                continue
+            v_m = re.search(r"<v>([^<]*)</v>", res[2])
+            if not v_m or not v_m.group(1):
+                continue
+            try:
+                current = float(v_m.group(1))
+            except ValueError:
+                continue
+            if current <= 0:
+                continue
+            xml = _set_cell_number(xml, f_ref, current + daily_hh)
+
+        self._save_sheet_xml(sheet, xml)
+
     def replace_photo(self, slot: int, image_bytes: bytes):
         """
         Reemplaza una foto en el registro fotográfico de Resumen.
