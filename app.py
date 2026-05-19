@@ -976,6 +976,46 @@ if generar:
     _total_personas = int(cal_region) + int(cal_no_region) + int(no_cal_region) + int(no_cal_no_region)
     _hh_total = _total_personas * hh_dia
 
+    # ── Avance real acumulado ──────────────────────────────────────────────────
+    # Formula: row9(date_col) = sum(qty*precio)/I13 ; row8 = row9 + row8_prev
+    _avance_acum = None
+    try:
+        _ws_cc = wb["C.Control"]
+        _I13 = _ws_cc.cell(row=13, column=9).value  # I13 = valor total contrato
+        if _I13 and float(_I13) > 0:
+            # Precio por ítem (row_num → valor_unitario)
+            _price_map = {
+                item["row_num"]: float(item["valor_unitario"] or 0)
+                for item in st.session_state.report_items
+            }
+            # Contribución de hoy
+            _today_value = sum(
+                q["cantidad_final"] * _price_map.get(q["row_num"], 0)
+                for q in items_con_qty
+            )
+            _today_pct = _today_value / float(_I13)
+
+            # Acumulado anterior: busca la última fila 8 no nula antes de la fecha
+            _prev_acum = 0.0
+            _date_col_prev = find_date_column(wb, fecha_informe)
+            if _date_col_prev:
+                # La fecha ya existe → acumulado previo es la columna anterior
+                _prev_col = _date_col_prev - 1
+                if _prev_col >= 16:
+                    _v = _ws_cc.cell(row=8, column=_prev_col).value
+                    _prev_acum = float(_v) if isinstance(_v, (int, float)) else 0.0
+            else:
+                # Fecha nueva → busca el último valor no nulo en fila 8
+                for _c in range(_ws_cc.max_column, 15, -1):
+                    _v = _ws_cc.cell(row=8, column=_c).value
+                    if isinstance(_v, (int, float)) and _v > 0:
+                        _prev_acum = float(_v)
+                        break
+
+            _avance_acum = _prev_acum + _today_pct
+    except Exception:
+        pass  # Si falla el cálculo, omitir (no bloquear la generación)
+
     form_data = {
         "fecha_informe":                    fecha_informe,
         "reporte_no":                       int(reporte_no),
@@ -1001,6 +1041,7 @@ if generar:
         "hse_visitas_ger":                  int(hse_visitas),
         "fotos":                            fotos_data,
         "locacion_display":                 locacion_display,
+        "avance_real_acumulado":            _avance_acum,   # decimal, ej. 0.1828
     }
 
     with st.spinner("Generando informe..."):

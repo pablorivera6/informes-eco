@@ -280,24 +280,44 @@ class XlsxZipWriter:
         xml = _set_cell_string(xml, ref, idx)
         self._save_sheet_xml(sheet, xml)
 
-    def find_date_col(self, sheet: str, target_date) -> int | None:
-        """Find the column index where row 1 contains target_date."""
+    def find_date_col(self, sheet: str, target_date, date_row: int = 1) -> int | None:
+        """Find the column index where date_row contains target_date."""
         if isinstance(target_date, datetime):
             target_date = target_date.date()
         serial = to_excel_serial(target_date)
         xml = self._get_sheet_xml(sheet)
 
-        # Search in row 1 for the cell with this serial value
-        row_m = re.search(r'<row r="1"[^>]*>(.*?)</row>', xml, re.DOTALL)
+        row_m = re.search(
+            r'<row r="' + str(date_row) + r'"[^>]*>(.*?)</row>', xml, re.DOTALL
+        )
         if not row_m:
             return None
         row_xml = row_m.group(1)
 
-        for m in re.finditer(r'<c r="([A-Z]+)1"[^>]*>.*?<v>(\d+)</v>', row_xml, re.DOTALL):
+        pat = re.compile(
+            r'<c r="([A-Z]+)' + str(date_row) + r'"[^>]*>.*?<v>(\d+)</v>',
+            re.DOTALL,
+        )
+        for m in pat.finditer(row_xml):
             if int(m.group(2)) == serial:
                 from openpyxl.utils import column_index_from_string
                 return column_index_from_string(m.group(1))
         return None
+
+    def get_number(self, sheet: str, row: int, col: int) -> float | None:
+        """Read the cached numeric value of a cell (None if missing or non-numeric)."""
+        xml = self._get_sheet_xml(sheet)
+        ref = _cell_ref(col, row)
+        result = _find_cell(xml, ref)
+        if not result:
+            return None
+        v_m = re.search(r"<v>([^<]*)</v>", result[2])
+        if not v_m or not v_m.group(1):
+            return None
+        try:
+            return float(v_m.group(1))
+        except ValueError:
+            return None
 
     def add_to_number(self, sheet: str, row: int, col: int, delta: float):
         """Add delta to existing numeric cell value (for C.Control daily quantities)."""

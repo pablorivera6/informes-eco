@@ -169,6 +169,19 @@ def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) 
             # Extender filas 8 y 9 (Curva S) hasta la fecha del informe
             w.extend_curva_s("C.Control", date_col)
 
+            # Avance real acumulado: escribir cached value en fila 8 y propagar
+            avance_acum = form_data.get("avance_real_acumulado")
+            if avance_acum is not None:
+                # Cached value en C.Control fila 8 (preserva la fórmula)
+                w.set_number("C.Control", 8, date_col, avance_acum)
+                # Resumen E14 (fila 14, col 5 = E)
+                w.set_number("Resumen", 14, 5, avance_acum)
+                # Curvas fila 6 (fechas en fila 3)
+                if "Curvas" in w._sheet_map:
+                    curvas_col = w.find_date_col("Curvas", target_date, date_row=3)
+                    if curvas_col:
+                        w.set_number("Curvas", 6, curvas_col, avance_acum)
+
     # ── Fotos ──────────────────────────────────────────────────────────────────
     _update_fotos(w, form_data)
 
