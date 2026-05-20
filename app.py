@@ -905,11 +905,12 @@ for section in sections:
             with qc1:
                 qty = st.number_input(
                     f"Cantidad{auto_label} ({unidad})",
-                    min_value=0.0, value=qty_default, step=0.01,
+                    min_value=0.0, value=qty_default, step=0.001,
+                    format="%.3f",
                     key=f"qty_{section}_{item_no}",
                 )
             with qc2:
-                st.metric(f"A registrar ({unidad})", f"{qty:.4f}")
+                st.metric(f"A registrar ({unidad})", f"{qty:.3f}")
 
             all_item_qtys.append({
                 "section":        section,
