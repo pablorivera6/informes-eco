@@ -16,7 +16,7 @@ from utils.excel_ops import (
     read_reporte_no,
     update_report,
 )
-from utils.conversions import default_factor, needs_conversion
+
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -855,7 +855,7 @@ for section in sections:
                 "_row_num":    it["row_num"],
                 "_unidad":     it["unidad"],
                 "_descripcion":it["descripcion"],
-                "_factor":     default_factor(it["unidad"], it["descripcion"]),
+
             })
 
         df   = pd.DataFrame(rows)
@@ -890,9 +890,7 @@ for section in sections:
             item_row = df[df["N°"] == item_no].iloc[0]
             unidad   = item_row["_unidad"]
             desc     = item_row["_descripcion"]
-            def_fac  = item_row["_factor"]
             row_num  = item_row["_row_num"]
-            conv     = needs_conversion(unidad, desc)
 
             # Cantidad pre-cargada desde FastField solo si es la sección activa
             ff_entry    = ff_items_map.get(item_no) if is_active else None
@@ -903,35 +901,24 @@ for section in sections:
                 f'<div class="item-title">#{item_no} &nbsp;—&nbsp; {desc[:100]}</div>',
                 unsafe_allow_html=True,
             )
-            qc1, qc2, qc3 = st.columns([2, 1, 2], gap="medium")
+            qc1, qc2 = st.columns([2, 2], gap="medium")
             with qc1:
-                field_label = f"Cantidad campo{auto_label} (ML)" if conv else f"Cantidad campo{auto_label} ({unidad})"
-                qty = st.number_input(field_label, min_value=0.0, value=qty_default, step=0.01,
-                                      key=f"qty_{section}_{item_no}")
+                qty = st.number_input(
+                    f"Cantidad{auto_label} ({unidad})",
+                    min_value=0.0, value=qty_default, step=0.01,
+                    key=f"qty_{section}_{item_no}",
+                )
             with qc2:
-                if conv:
-                    factor = st.number_input(
-                        "Factor ML → M3", min_value=0.001, value=def_fac, step=0.001,
-                        key=f"fac_{section}_{item_no}",
-                        help="Sección transversal: ancho × profundidad (m²)",
-                    )
-                else:
-                    factor = 1.0
-                    st.markdown(
-                        '<p class="factor-note">Factor 1.0 — sin conversión</p>',
-                        unsafe_allow_html=True,
-                    )
-            with qc3:
-                st.metric(f"A registrar ({unidad})", f"{qty * factor:.4f}")
+                st.metric(f"A registrar ({unidad})", f"{qty:.4f}")
 
             all_item_qtys.append({
                 "section":        section,
                 "item_no":        item_no,
                 "row_num":        int(row_num),
                 "cantidad_campo": qty,
-                "factor":         factor,
+                "factor":         1.0,
                 "unidad":         unidad,
-                "cantidad_final": round(qty * factor, 4),
+                "cantidad_final": round(qty, 4),
             })
 
 # ─────────────────────────────────────────────────────────────────────────────
