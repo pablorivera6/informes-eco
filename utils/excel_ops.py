@@ -252,15 +252,54 @@ def _find_hse_log_row(writer, target_date) -> int:
         if v and int(v.group(1)) == serial:
             return row_num
 
-    # Find first empty row in col B starting from row 30
-    existing_rows = set()
-    for m in re.finditer(r'<c r="B(\d+)"', xml):
-        existing_rows.add(int(m.group(1)))
+    # Date not present yet (e.g. a new day past the last filled row).
+    # The calendar pre-builds empty day rows (B cell exists but has no value),
+    # interleaved with spacer/week-header rows (column A holds the week number).
+    # We must insert chronologically: scan forward from the row right after the
+    # latest date that is < target, and take the first EMPTY DAY row — i.e. a row
+    # whose B cell has no value AND whose A cell has no value (spacers carry a
+    # week number in A, so skip them).
+    def _cell_value(col: str, row: int):
+        m = re.search(
+            r'<c r="' + col + str(row) + r'"[^>]*?(?:/>|>(.*?)</c>)',
+            xml, re.DOTALL,
+        )
+        if not m:
+            return None, False  # cell absent
+        content = m.group(1)
+        if not content:
+            return "", True  # cell present but empty
+        v = re.search(r"<v>(\d+)</v>", content)
+        return (v.group(1) if v else ""), True
 
-    for r in range(30, 500):
-        if r not in existing_rows:
-            writer.set_date("HSE", r, 2, target_date)  # B col = col 2
+    # Row holding the closest date below the target. Pick by largest DATE (not
+    # by row number) so the monthly-summary block at the bottom — which repeats
+    # earlier dates at high row numbers — never wins over the real predecessor.
+    best_serial, best_row = -1, None
+    for m in re.finditer(r'<c r="B(\d+)"[^>]*?(?:/>|>(.*?)</c>)', xml, re.DOTALL):
+        rn = int(m.group(1))
+        if rn < 30 or not m.group(2):
+            continue
+        v = re.search(r"<v>(\d+)</v>", m.group(2))
+        if v:
+            s = int(v.group(1))
+            if s < serial and s > best_serial:
+                best_serial, best_row = s, rn
+    start = (best_row + 1) if best_row else 30
+
+    for r in range(start, start + 120):
+        b_val, b_exists = _cell_value("B", r)
+        if not b_exists:
+            # Table ran out of pre-built rows; create a fresh one.
+            writer.set_date("HSE", r, 2, target_date)
             return r
+        if b_val:
+            continue  # already dated
+        a_val, _ = _cell_value("A", r)
+        if a_val:
+            continue  # spacer / week-header row
+        writer.set_date("HSE", r, 2, target_date)  # B col = col 2
+        return r
 
     return 500  # fallback
 
