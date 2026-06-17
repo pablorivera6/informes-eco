@@ -290,18 +290,22 @@ def _find_hse_log_row(writer, target_date) -> int:
     for r in range(start, start + 120):
         b_val, b_exists = _cell_value("B", r)
         if not b_exists:
-            # Table ran out of pre-built rows; create a fresh one.
-            writer.set_date("HSE", r, 2, target_date)
-            return r
+            break  # reached the end of the contiguous table
         if b_val:
-            continue  # already dated
+            break  # hit a dated row (monthly-summary block) → no empty days left
         a_val, _ = _cell_value("A", r)
         if a_val:
             continue  # spacer / week-header row
         writer.set_date("HSE", r, 2, target_date)  # B col = col 2
         return r
 
-    return 500  # fallback
+    # No pre-built empty day row available: clone the predecessor day row's
+    # formatting into a fresh row appended at the end, then date it. This keeps
+    # the report working indefinitely once the pre-built calendar is exhausted.
+    template_row = best_row if best_row else 30
+    new_row = writer.clone_row_format("HSE", template_row)
+    writer.set_date("HSE", new_row, 2, target_date)
+    return new_row
 
 
 def read_reporte_no(wb) -> int:

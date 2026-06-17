@@ -344,6 +344,38 @@ class XlsxZipWriter:
                 return column_index_from_string(m.group(1))
         return None
 
+    def clone_row_format(self, sheet: str, src_row: int) -> int:
+        """
+        Clone an existing row's structure (every <c> with its style) into a brand
+        new, empty row appended at the end of the sheet. Values and formulas are
+        stripped so the caller can fill it; cell styles (borders, date/number
+        formats) are preserved so the new day row looks like the rest of the
+        calendar. Returns the new row number.
+        """
+        xml = self._get_sheet_xml(sheet)
+        src_m = re.search(
+            r'<row r="' + str(src_row) + r'"[^>]*>(.*?)</row>', xml, re.DOTALL
+        )
+        if not src_m:
+            return src_row  # nothing to clone
+
+        new_row = max(int(r) for r in re.findall(r'<row r="(\d+)"', xml)) + 1
+
+        # Rebuild each source cell at the new row, keeping only its style attr.
+        cells = []
+        for cm in re.finditer(
+            r'<c r="([A-Z]+)\d+"([^>]*?)(?:/>|>.*?</c>)', src_m.group(1), re.DOTALL
+        ):
+            col_ltr, attrs = cm.group(1), cm.group(2)
+            s = re.search(r'\ss="\d+"', attrs)
+            style = s.group(0) if s else ""
+            cells.append(f'<c r="{col_ltr}{new_row}"{style}/>')
+
+        new_row_xml = f'<row r="{new_row}">' + "".join(cells) + "</row>"
+        xml = re.sub(r"(</sheetData>)", new_row_xml + r"\1", xml, count=1)
+        self._save_sheet_xml(sheet, xml)
+        return new_row
+
     def get_number(self, sheet: str, row: int, col: int) -> float | None:
         """Read the cached numeric value of a cell (None if missing or non-numeric)."""
         xml = self._get_sheet_xml(sheet)
