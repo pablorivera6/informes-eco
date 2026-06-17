@@ -137,6 +137,16 @@ _CELL_RE_TEMPLATE = (
 )
 
 
+def _get_cell_style(sheet_xml: str, ref: str) -> str:
+    """Return the style attribute (e.g. ' s="356"') of a cell, or '' if none."""
+    result = _find_cell(sheet_xml, ref)
+    if not result:
+        return ""
+    attrs = result[1]
+    m = re.search(r'\ss="\d+"', attrs)
+    return m.group(0) if m else ""
+
+
 def _find_cell(sheet_xml: str, ref: str):
     """Return (match, open_attrs, content, is_self_closing) or None."""
     pat = re.compile(
@@ -193,7 +203,7 @@ def _set_cell_string(sheet_xml: str, ref: str, ss_idx: int) -> str:
 
 
 def _insert_cell(sheet_xml: str, ref: str, value_xml: str, type_attr: str = "") -> str:
-    """Insert a new <c> element into the correct <row>."""
+    """Insert a new <c> element into the correct <row>, creating the row if needed."""
     col_str = "".join(c for c in ref if c.isalpha())
     row_num = int("".join(c for c in ref if c.isdigit()))
     from openpyxl.utils import column_index_from_string
@@ -205,7 +215,10 @@ def _insert_cell(sheet_xml: str, ref: str, value_xml: str, type_attr: str = "") 
     )
     m = row_pattern.search(sheet_xml)
     if not m:
-        return sheet_xml  # Row doesn't exist — skip for safety
+        sheet_xml = _create_row(sheet_xml, row_num)
+        m = row_pattern.search(sheet_xml)
+        if not m:
+            return sheet_xml
 
     open_tag, row_content, close_tag = m.group(1), m.group(2), m.group(3)
     new_cell = f'<c r="{ref}"{type_attr}>{value_xml}</c>'
@@ -221,6 +234,27 @@ def _insert_cell(sheet_xml: str, ref: str, value_xml: str, type_attr: str = "") 
 
     row_content = row_content[:insert_pos] + new_cell + row_content[insert_pos:]
     sheet_xml = sheet_xml[:m.start()] + open_tag + row_content + close_tag + sheet_xml[m.end():]
+    return sheet_xml
+
+
+def _create_row(sheet_xml: str, row_num: int) -> str:
+    """Create an empty <row> element in the correct position within <sheetData>."""
+    sd_m = re.search(r"(</sheetData>)", sheet_xml)
+    if not sd_m:
+        return sheet_xml
+
+    insert_pos = sd_m.start()
+
+    row_positions = list(re.finditer(r'<row r="(\d+)"', sheet_xml[:sd_m.start()]))
+    for rm in reversed(row_positions):
+        if int(rm.group(1)) < row_num:
+            close_m = re.search(r'</row>', sheet_xml[rm.end():sd_m.start()])
+            if close_m:
+                insert_pos = rm.end() + close_m.end()
+            break
+
+    new_row = f'<row r="{row_num}">'
+    sheet_xml = sheet_xml[:insert_pos] + new_row + "</row>" + sheet_xml[insert_pos:]
     return sheet_xml
 
 
@@ -365,27 +399,32 @@ class XlsxZipWriter:
             col_ltr  = get_column_letter(col)
             prev_ltr = get_column_letter(col - 1)
 
+            # Estilo (formato %) tomado de la columna previa para conservar el
+            # formato de porcentaje en vez de quedar en formato "General".
+            style9 = _get_cell_style(xml, f"{prev_ltr}9") or ' s="347"'
+            style8 = _get_cell_style(xml, f"{prev_ltr}8") or ' s="356"'
+
             # Fila 9: avance diario
             f9  = f"SUMPRODUCT({col_ltr}15:{col_ltr}128,$G$15:$G$128)/$I$13"
             ref9 = f"{col_ltr}9"
             result9 = _find_cell(xml, ref9)
             if result9:
-                m9, attrs9, _, _ = result9
-                replacement9 = f'<c r="{ref9}"{attrs9}><f>{f9}</f></c>'
+                m9, _, _, _ = result9
+                replacement9 = f'<c r="{ref9}"{style9}><f>{f9}</f></c>'
                 xml = xml[:m9.start()] + replacement9 + xml[m9.end():]
             else:
-                xml = _insert_cell(xml, ref9, f"<f>{f9}</f>", type_attr=' s="347"')
+                xml = _insert_cell(xml, ref9, f"<f>{f9}</f>", type_attr=style9)
 
             # Fila 8: avance acumulado
             f8  = f"{col_ltr}9+{prev_ltr}8"
             ref8 = f"{col_ltr}8"
             result8 = _find_cell(xml, ref8)
             if result8:
-                m8, attrs8, _, _ = result8
-                replacement8 = f'<c r="{ref8}"{attrs8}><f>{f8}</f></c>'
+                m8, _, _, _ = result8
+                replacement8 = f'<c r="{ref8}"{style8}><f>{f8}</f></c>'
                 xml = xml[:m8.start()] + replacement8 + xml[m8.end():]
             else:
-                xml = _insert_cell(xml, ref8, f"<f>{f8}</f>", type_attr=' s="356"')
+                xml = _insert_cell(xml, ref8, f"<f>{f8}</f>", type_attr=style8)
 
         self._save_sheet_xml(sheet, xml)
 

@@ -967,42 +967,44 @@ if generar:
     # ── Avance real acumulado ──────────────────────────────────────────────────
     # Formula: row9(date_col) = sum(qty*precio)/I13 ; row8 = row9 + row8_prev
     _avance_acum = None
+    _avance_debug = []
     try:
         _ws_cc = wb["C.Control"]
         _I13 = _ws_cc.cell(row=13, column=9).value  # I13 = valor total contrato
         if _I13 and float(_I13) > 0:
-            # Precio por ítem (row_num → valor_unitario)
             _price_map = {
                 item["row_num"]: float(item["valor_unitario"] or 0)
                 for item in st.session_state.report_items
             }
-            # Contribución de hoy
             _today_value = sum(
                 q["cantidad_final"] * _price_map.get(q["row_num"], 0)
                 for q in items_con_qty
             )
             _today_pct = _today_value / float(_I13)
+            _avance_debug.append(f"Valor hoy: {_today_value:,.2f} / {float(_I13):,.2f} = {_today_pct:.6f}")
 
-            # Acumulado anterior: busca la última fila 8 no nula antes de la fecha
             _prev_acum = 0.0
             _date_col_prev = find_date_column(wb, fecha_informe)
             if _date_col_prev:
-                # La fecha ya existe → acumulado previo es la columna anterior
                 _prev_col = _date_col_prev - 1
                 if _prev_col >= 16:
                     _v = _ws_cc.cell(row=8, column=_prev_col).value
                     _prev_acum = float(_v) if isinstance(_v, (int, float)) else 0.0
+                    _avance_debug.append(f"Acum. anterior (col {_prev_col}): {_prev_acum:.6f} (raw: {_v})")
             else:
-                # Fecha nueva → busca el último valor no nulo en fila 8
                 for _c in range(_ws_cc.max_column, 15, -1):
                     _v = _ws_cc.cell(row=8, column=_c).value
                     if isinstance(_v, (int, float)) and _v > 0:
                         _prev_acum = float(_v)
+                        _avance_debug.append(f"Acum. anterior (col {_c}): {_prev_acum:.6f}")
                         break
 
             _avance_acum = _prev_acum + _today_pct
-    except Exception:
-        pass  # Si falla el cálculo, omitir (no bloquear la generación)
+            _avance_debug.append(f"Total: {_prev_acum:.6f} + {_today_pct:.6f} = {_avance_acum:.6f} ({_avance_acum*100:.2f}%)")
+        else:
+            _avance_debug.append(f"I13 = {_I13} — sin valor de contrato para calcular avance")
+    except Exception as _avance_err:
+        _avance_debug.append(f"Error: {_avance_err}")
 
     form_data = {
         "fecha_informe":                    fecha_informe,
@@ -1048,6 +1050,10 @@ if generar:
                 'Informe generado correctamente. Descarga el archivo a continuación.</div>',
                 unsafe_allow_html=True,
             )
+            if _avance_debug:
+                with st.expander("Detalle avance acumulado (debug)", expanded=False):
+                    for line in _avance_debug:
+                        st.text(line)
             dl_col, _ = st.columns([2, 3])
             with dl_col:
                 st.download_button(
