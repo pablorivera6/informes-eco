@@ -236,12 +236,20 @@ def _find_hse_log_row(writer, target_date) -> int:
 
     xml = writer._get_sheet_xml("HSE")
     import re
-    # Search for existing date in col B (rows 30+)
-    for m in re.finditer(r'<c r="B(\d+)"[^>]*>.*?<v>(\d+)</v>', xml, re.DOTALL):
+    # Search for existing date in col B (rows 30+). Match each cell's OWN <v>
+    # bounded by its </c>; a value-less self-closing cell (e.g. weekend spacer
+    # rows) must NOT borrow the next cell's value, or we'd return a wrong row.
+    for m in re.finditer(
+        r'<c r="B(\d+)"[^>]*?(?:/>|>(.*?)</c>)', xml, re.DOTALL
+    ):
         row_num = int(m.group(1))
         if row_num < 30:
             continue
-        if int(m.group(2)) == serial:
+        content = m.group(2)
+        if not content:
+            continue
+        v = re.search(r"<v>(\d+)</v>", content)
+        if v and int(v.group(1)) == serial:
             return row_num
 
     # Find first empty row in col B starting from row 30

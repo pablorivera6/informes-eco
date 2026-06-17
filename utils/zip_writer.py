@@ -328,12 +328,18 @@ class XlsxZipWriter:
             return None
         row_xml = row_m.group(1)
 
+        # Match each cell's OWN <v> bounded by its </c>; an empty self-closing
+        # cell must not borrow the next cell's value (that returns a wrong col).
         pat = re.compile(
-            r'<c r="([A-Z]+)' + str(date_row) + r'"[^>]*>.*?<v>(\d+)</v>',
+            r'<c r="([A-Z]+)' + str(date_row) + r'"[^>]*?(?:/>|>(.*?)</c>)',
             re.DOTALL,
         )
         for m in pat.finditer(row_xml):
-            if int(m.group(2)) == serial:
+            content = m.group(2)
+            if not content:
+                continue
+            v = re.search(r"<v>(\d+)</v>", content)
+            if v and int(v.group(1)) == serial:
                 from openpyxl.utils import column_index_from_string
                 return column_index_from_string(m.group(1))
         return None
