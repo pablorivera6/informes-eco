@@ -184,33 +184,6 @@ def _set_cell_number(sheet_xml: str, ref: str, value: float | int) -> str:
     return sheet_xml
 
 
-def _set_cell_formula(sheet_xml: str, ref: str, formula: str, cached=None) -> str:
-    """Set a formula in a cell, keeping its style. Optional cached value lets the
-    result display before Excel recalculates."""
-    v_xml = f"<v>{_val_str(cached)}</v>" if cached is not None else ""
-    inner = f"<f>{formula}</f>{v_xml}"
-    result = _find_cell(sheet_xml, ref)
-    if result:
-        m, attrs, content, is_sc = result
-        attrs = re.sub(r'\s*t="[^"]*"', "", attrs)  # formula result, not string
-        replacement = f'<c r="{ref}"{attrs}>{inner}</c>'
-        sheet_xml = sheet_xml[:m.start()] + replacement + sheet_xml[m.end():]
-    else:
-        # New cell: inherit the style of the previous column (same row) so the
-        # formula cell matches the rest of the series instead of looking bare.
-        from openpyxl.utils import get_column_letter, column_index_from_string
-        col_str = "".join(c for c in ref if c.isalpha())
-        row_str = "".join(c for c in ref if c.isdigit())
-        style = ""
-        col_idx = column_index_from_string(col_str)
-        if col_idx > 1:
-            style = _get_cell_style(
-                sheet_xml, f"{get_column_letter(col_idx - 1)}{row_str}"
-            )
-        sheet_xml = _insert_cell(sheet_xml, ref, inner, type_attr=style)
-    return sheet_xml
-
-
 def _set_cell_string(sheet_xml: str, ref: str, ss_idx: int) -> str:
     """Set a shared-string value in a cell (type t="s")."""
     result = _find_cell(sheet_xml, ref)
@@ -331,12 +304,6 @@ class XlsxZipWriter:
     def set_date(self, sheet: str, row: int, col: int, value):
         serial = to_excel_serial(value)
         self.set_number(sheet, row, col, serial)
-
-    def set_formula(self, sheet: str, row: int, col: int, formula: str, cached=None):
-        xml = self._get_sheet_xml(sheet)
-        ref = _cell_ref(col, row)
-        xml = _set_cell_formula(xml, ref, formula, cached)
-        self._save_sheet_xml(sheet, xml)
 
     def set_text(self, sheet: str, row: int, col: int, text: str):
         if not text:
