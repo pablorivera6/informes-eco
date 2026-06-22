@@ -310,6 +310,8 @@ class XlsxZipWriter:
         self._modified_sheets: dict[str, str] = {}
         # path → modified binary (media files)
         self._modified_media: dict[str, bytes] = {}
+        # arbitrary part overrides (e.g. drawing xml / rels) → str or bytes
+        self._extra_parts: dict[str, object] = {}
 
     def _get_sheet_xml(self, sheet_name: str) -> str:
         path = self._sheet_map[sheet_name]
@@ -367,23 +369,103 @@ class XlsxZipWriter:
                         if row >= 28:  # photo registry; logos sit near the top
                             photos.append((row, col, rid2media[emb.group(1)]))
 
-                # Map each anchor to its band by absolute row spacing from the top
-                # registry row (~2 rows apart). Using the spacing instead of a
-                # relative index stays correct even if a middle/bottom row has no
-                # photo (fewer anchors), which is the failing case for <4 photos.
+                # Map each present anchor to its slot by absolute row spacing from
+                # the top registry row (~2 rows apart) × side (left/right column).
+                slot_anchor: dict[int, str] = {}  # slot → full anchor xml
                 if photos:
                     top = min(r for r, _, _ in photos)
-                    for row, col, media in photos:
+                    for anc in re.finditer(
+                        r"<xdr:(twoCellAnchor|oneCellAnchor)\b.*?</xdr:\1>",
+                        dxml, re.DOTALL,
+                    ):
+                        body = anc.group(0)
+                        frm = re.search(
+                            r"<xdr:from>.*?<xdr:col>(\d+)</xdr:col>.*?<xdr:row>(\d+)</xdr:row>",
+                            body, re.DOTALL,
+                        )
+                        emb = re.search(r'r:embed="([^"]+)"', body)
+                        if not (frm and emb and emb.group(1) in rid2media):
+                            continue
+                        col, row = int(frm.group(1)), int(frm.group(2))
+                        if row < 28:
+                            continue
                         band = (row - top) // 2
                         if not (0 <= band <= 2):
                             continue
-                        side = 0 if col < 12 else 1  # left vs right column
-                        slot = band * 2 + side + 1
-                        mapping.setdefault(slot, media)
+                        slot = band * 2 + (0 if col < 12 else 1) + 1
+                        mapping.setdefault(slot, rid2media[emb.group(1)])
+                        slot_anchor.setdefault(slot, body)
+
+                    # Rebuild any missing slot by cloning a same-side anchor and
+                    # shifting it to the right row band, so the report works for
+                    # ANY photo count even if a template lost some anchors.
+                    missing = [s for s in range(1, 7) if s not in mapping]
+                    if missing and slot_anchor:
+                        mapping = self._rebuild_photo_anchors(
+                            draw, dxml, drels, rid2media, slot_anchor, top, mapping
+                        )
         except Exception:
             mapping = {}
 
         self._photo_map_cache = mapping
+        return mapping
+
+    def _rebuild_photo_anchors(self, draw, dxml, drels, rid2media,
+                               slot_anchor, top, mapping) -> dict[int, str]:
+        """Synthesize anchors for missing photo slots by cloning an existing one
+        on the same side (left/right) and moving it to the slot's row band. Adds a
+        white image + relationship for each, and stores the modified drawing/rels
+        so save() persists them. Returns the completed slot→media map."""
+        # Highest existing image number across the whole package.
+        with zipfile.ZipFile(io.BytesIO(self._original), "r") as zf:
+            nums = [int(re.search(r"image(\d+)", n).group(1))
+                    for n in zf.namelist() if re.search(r"xl/media/image\d+", n)]
+        next_img = max(nums) + 1 if nums else 1
+        next_rid = max(
+            [int(m.group(1)) for m in re.finditer(r'Id="rId(\d+)"', drels)] or [0]
+        ) + 1
+        next_cnv = max(
+            [int(m.group(1)) for m in re.finditer(r'<xdr:cNvPr id="(\d+)"', dxml)] or [1]
+        ) + 1
+
+        from PIL import Image as PILImage
+        new_anchors, new_rels = [], []
+        for slot in [s for s in range(1, 7) if s not in mapping]:
+            band, side = (slot - 1) // 2, (slot - 1) % 2
+            target_row = top + band * 2
+            ref = next((slot_anchor[s] for s in slot_anchor
+                        if (s - 1) % 2 == side), None) or next(iter(slot_anchor.values()))
+
+            media = f"xl/media/image{next_img}.png"
+            rid = f"rId{next_rid}"
+            buf = io.BytesIO()
+            PILImage.new("RGB", (800, 600), "white").save(buf, format="PNG")
+            self._modified_media[media] = buf.getvalue()
+
+            anc = ref
+            anc = re.sub(r'(<xdr:from>.*?<xdr:row>)\d+(</xdr:row>)',
+                         rf"\g<1>{target_row}\g<2>", anc, count=1, flags=re.DOTALL)
+            anc = re.sub(r'(<xdr:to>.*?<xdr:row>)\d+(</xdr:row>)',
+                         rf"\g<1>{target_row}\g<2>", anc, count=1, flags=re.DOTALL)
+            anc = re.sub(r'r:embed="[^"]+"', f'r:embed="{rid}"', anc, count=1)
+            anc = re.sub(r'<xdr:cNvPr id="\d+" name="[^"]*"',
+                         f'<xdr:cNvPr id="{next_cnv}" name="Imagen {next_cnv}"',
+                         anc, count=1)
+            new_anchors.append(anc)
+            new_rels.append(
+                f'<Relationship Id="{rid}" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                f'relationships/image" Target="../media/image{next_img}.png"/>'
+            )
+            mapping[slot] = media
+            next_img += 1
+            next_rid += 1
+            next_cnv += 1
+
+        dxml2 = dxml.replace("</xdr:wsDr>", "".join(new_anchors) + "</xdr:wsDr>")
+        drels2 = drels.replace("</Relationships>", "".join(new_rels) + "</Relationships>")
+        self._extra_parts[f"xl/drawings/{draw}"] = dxml2
+        self._extra_parts[f"xl/drawings/_rels/{draw}.rels"] = drels2
         return mapping
 
     def set_number(self, sheet: str, row: int, col: int, value: float | int):
@@ -655,6 +737,10 @@ class XlsxZipWriter:
     def save(self) -> bytes:
         output = io.BytesIO()
         written = set()
+
+        def _bytes(v):
+            return v.encode("utf-8") if isinstance(v, str) else v
+
         with zipfile.ZipFile(io.BytesIO(self._original), "r") as zin:
             with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zout:
                 for item in zin.infolist():
@@ -662,16 +748,23 @@ class XlsxZipWriter:
                         data = self._ss_xml.encode("utf-8")
                     elif item.filename in self._modified_sheets:
                         data = self._modified_sheets[item.filename].encode("utf-8")
+                    elif item.filename in self._extra_parts:
+                        data = _bytes(self._extra_parts[item.filename])
                     elif item.filename in self._modified_media:
                         data = self._modified_media[item.filename]
                     else:
                         data = zin.read(item.filename)
                     zout.writestr(item, data)
                     written.add(item.filename)
-                # Re-create media files referenced by drawings but missing from the
-                # template (a broken chain can drop them), so anchors don't break.
+                # Add parts not present in the template: re-created media a broken
+                # chain dropped, and any synthesized drawing/rels overrides.
                 for path, data in self._modified_media.items():
                     if path not in written:
                         zout.writestr(path, data)
+                        written.add(path)
+                for path, data in self._extra_parts.items():
+                    if path not in written:
+                        zout.writestr(path, _bytes(data))
+                        written.add(path)
         output.seek(0)
         return output.read()
