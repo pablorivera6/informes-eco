@@ -211,16 +211,19 @@ def _update_fotos(w, form_data: dict):
     locacion = form_data.get("locacion_display", "Cusiana")
 
     for idx, (row, col) in enumerate(_PHOTO_DESC_CELLS):
-        if idx >= len(fotos):
-            break
-        foto = fotos[idx]
-        desc = foto.get("descripcion", "").strip()
-        texto = f"Fecha: {fecha_str}\nUbicación: {locacion}\nDescripción: {desc}"
-        w.set_text("Resumen", row, col, texto)
-
+        foto = fotos[idx] if idx < len(fotos) else {}
         img_bytes = foto.get("image_bytes")
+
         if img_bytes:
             w.replace_photo(idx + 1, img_bytes)  # slots 1-6
+            desc = foto.get("descripcion", "").strip()
+            texto = f"Fecha: {fecha_str}\nUbicación: {locacion}\nDescripción: {desc}"
+            w.set_text("Resumen", row, col, texto)
+        else:
+            # Sin foto en este espacio: dejar en blanco (imagen y descripción)
+            # para que no arrastre la foto/descr. del reporte anterior.
+            w.blank_photo(idx + 1)
+            w.set_text("Resumen", row, col, " ")
 
 
 def _set_if(sheet, row, col, key, writer, form_data):

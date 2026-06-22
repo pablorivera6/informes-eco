@@ -527,6 +527,14 @@ class XlsxZipWriter:
         img.convert("RGB").save(buf, format="PNG")
         self._modified_media[f"xl/media/image{slot + 3}.png"] = buf.getvalue()
 
+    def blank_photo(self, slot: int):
+        """Deja en blanco el placeholder de una foto (slot 1-6) escribiendo una
+        imagen blanca, para que no arrastre la foto del reporte anterior."""
+        from PIL import Image as PILImage
+        buf = io.BytesIO()
+        PILImage.new("RGB", (800, 600), "white").save(buf, format="PNG")
+        self._modified_media[f"xl/media/image{slot + 3}.png"] = buf.getvalue()
+
     def save(self) -> bytes:
         output = io.BytesIO()
         with zipfile.ZipFile(io.BytesIO(self._original), "r") as zin:
