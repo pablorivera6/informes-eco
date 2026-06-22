@@ -180,9 +180,17 @@ def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) 
                 # Fechas de Curvas están en fila 1
                 curvas_col = w.find_date_col("Curvas", target_date, date_row=1)
                 if curvas_col:
-                    # Real acumulado → Curvas fila 4
+                    # Real acumulado → Curvas fila 4: escribir la FÓRMULA que
+                    # referencia C.Control (no el número), igual que el resto de
+                    # la fila ('C.Control'!{col}8). El valor cacheado permite que
+                    # se vea el % antes de que Excel recalcule.
                     if avance_acum is not None:
-                        w.set_number("Curvas", 4, curvas_col, avance_acum)
+                        from openpyxl.utils import get_column_letter
+                        cc_col = get_column_letter(date_col)
+                        w.set_formula(
+                            "Curvas", 4, curvas_col,
+                            f"'C.Control'!{cc_col}8", cached=avance_acum,
+                        )
                     # Plan acumulado → leer de Curvas fila 3 → Resumen B14
                     plan_acum = w.get_number("Curvas", 3, curvas_col)
                     if plan_acum is not None:
