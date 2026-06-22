@@ -654,12 +654,21 @@ st.markdown(
 fotos_data = []
 FOTO_SLOTS  = 6
 ff_photos   = st.session_state.ff_photos   # fotos descargadas automáticamente
-auto_loaded = any(b for b in ff_photos if b)
 
-if auto_loaded:
+# Fotos disponibles descargadas, con su número original (1-based). Se descartan
+# las que fallaron al descargar (None).
+available   = [(i + 1, b) for i, b in enumerate(ff_photos) if b]
+n_avail     = len(available)
+photo_by_num = {num: b for num, b in available}
+NONE_LABEL  = "— Sin foto / cargar manual —"
+opt_labels  = [NONE_LABEL] + [f"Foto {num}" for num, _ in available]
+
+if n_avail:
+    extra = " El formulario trae más de 6 fotos: elige cuáles 6 van al Excel." if n_avail > FOTO_SLOTS else ""
     st.markdown(
         f'<div class="pill pill-ok" style="margin-bottom:12px;"><span class="pill-dot"></span>'
-        f'Fotos cargadas automáticamente desde FastField. Solo edita la descripción de cada una.</div>',
+        f'{n_avail} foto(s) descargada(s) desde FastField.{extra} '
+        f'En cada espacio elige qué foto va y escribe su descripción.</div>',
         unsafe_allow_html=True,
     )
 else:
@@ -668,6 +677,8 @@ else:
         'descargadas de FastField. La fecha y ubicación se llenan automáticamente.</p>',
         unsafe_allow_html=True,
     )
+
+_chosen_nums = []  # para avisar si se repite la misma foto en dos slots
 
 for row_idx in range(0, FOTO_SLOTS, 2):
     fc1, fc2 = st.columns(2, gap="large")
@@ -678,15 +689,27 @@ for row_idx in range(0, FOTO_SLOTS, 2):
         with fc:
             st.markdown(f'<div class="sub-label">Foto {slot}</div>', unsafe_allow_html=True)
 
-            # Foto auto-descargada desde FastField (si existe)
-            auto_bytes = ff_photos[slot - 1] if slot - 1 < len(ff_photos) else None
+            img_bytes = None
 
-            if auto_bytes:
-                # Mostrar foto automática — solo descripción es editable
-                st.image(auto_bytes, use_container_width=True)
-                img_bytes = auto_bytes
-            else:
-                # No hay foto automática — permitir carga manual
+            if n_avail:
+                # Selector: por defecto el slot toma la foto número {slot}.
+                default_label = f"Foto {slot}" if slot in photo_by_num else NONE_LABEL
+                choice = st.selectbox(
+                    f"Seleccionar foto para espacio {slot}",
+                    opt_labels,
+                    index=opt_labels.index(default_label),
+                    key=f"sel_{slot}",
+                    label_visibility="collapsed",
+                )
+                if choice != NONE_LABEL:
+                    num = int(choice.split()[1])
+                    img_bytes = photo_by_num.get(num)
+                    _chosen_nums.append(num)
+                    if img_bytes:
+                        st.image(img_bytes, use_container_width=True)
+
+            if img_bytes is None:
+                # Sin selección (o sin fotos automáticas): permitir carga manual.
                 img_file = st.file_uploader(
                     f"Foto {slot}",
                     type=["jpg", "jpeg", "png"],
@@ -697,7 +720,6 @@ for row_idx in range(0, FOTO_SLOTS, 2):
                     img_bytes = img_file.read()
                     st.image(img_bytes, use_container_width=True)
                 else:
-                    img_bytes = None
                     st.markdown(
                         '<div style="height:140px;background:#161B22;border:1px dashed #30363D;'
                         'border-radius:8px;display:flex;align-items:center;justify-content:center;'
@@ -712,6 +734,14 @@ for row_idx in range(0, FOTO_SLOTS, 2):
                 key=f"desc_{slot}",
             )
             fotos_data.append({"image_bytes": img_bytes, "descripcion": desc})
+
+# Aviso si la misma foto quedó elegida en más de un espacio.
+_dups = {n for n in _chosen_nums if _chosen_nums.count(n) > 1}
+if _dups:
+    st.warning(
+        "⚠️ La(s) Foto(s) " + ", ".join(f"#{n}" for n in sorted(_dups)) +
+        " está(n) seleccionada(s) en más de un espacio. Revisa para no repetir fotos en el Excel."
+    )
 
 st.markdown("""
 <div class="step-hdr">
