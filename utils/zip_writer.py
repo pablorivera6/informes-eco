@@ -322,6 +322,60 @@ class XlsxZipWriter:
         path = self._sheet_map[sheet_name]
         self._modified_sheets[path] = xml
 
+    def _photo_slot_media(self) -> dict[int, str]:
+        """
+        Resolve which media file backs each of the 6 photo slots by reading the
+        Resumen drawing anchors, instead of assuming image{slot+3}. Excel/Numbers
+        renumber media on save, so the hardcoded mapping put photos over logos;
+        reading the anchors makes placement correct for any numbering.
+
+        Slots are ordered top→bottom, left→right (matching _PHOTO_DESC_CELLS):
+        rows 31/33/35 of Resumen, left column then right column.
+        Returns {slot(1-6): "xl/media/imageN.ext"}; empty dict if it can't parse.
+        """
+        if getattr(self, "_photo_map_cache", None) is not None:
+            return self._photo_map_cache
+
+        mapping: dict[int, str] = {}
+        try:
+            with zipfile.ZipFile(io.BytesIO(self._original), "r") as zf:
+                base = self._sheet_map["Resumen"].split("/")[-1]
+                rels = zf.read("xl/worksheets/_rels/" + base + ".rels").decode("utf-8")
+                dnum = re.search(r'Target="[^"]*drawing(\d+)\.xml"', rels).group(1)
+                draw = f"drawing{dnum}.xml"
+                dxml = zf.read("xl/drawings/" + draw).decode("utf-8")
+                drels = zf.read(f"xl/drawings/_rels/{draw}.rels").decode("utf-8")
+                rid2media = {
+                    m.group(1): "xl/media/" + m.group(2).split("/")[-1]
+                    for m in re.finditer(r'Id="([^"]+)"[^>]*Target="([^"]+)"', drels)
+                }
+                anchors = []
+                for anc in re.finditer(
+                    r"<xdr:(twoCellAnchor|oneCellAnchor)\b.*?</xdr:\1>", dxml, re.DOTALL
+                ):
+                    body = anc.group(0)
+                    frm = re.search(
+                        r"<xdr:from>.*?<xdr:col>(\d+)</xdr:col>.*?<xdr:row>(\d+)</xdr:row>",
+                        body, re.DOTALL,
+                    )
+                    emb = re.search(r'r:embed="([^"]+)"', body)
+                    if frm and emb and emb.group(1) in rid2media:
+                        anchors.append(
+                            (int(frm.group(2)), int(frm.group(1)), rid2media[emb.group(1)])
+                        )
+                # The photo registry lives below row 28; logos sit near the top.
+                photos = sorted(
+                    [a for a in anchors if a[0] >= 28], key=lambda a: (a[0], a[1])
+                )
+                if len(photos) == 6:
+                    for i, (_row, _col, media) in enumerate(photos):
+                        mapping[i + 1] = media
+        except Exception:
+            mapping = {}
+
+        self._photo_map_cache = mapping
+        return mapping
+
     def set_number(self, sheet: str, row: int, col: int, value: float | int):
         xml = self._get_sheet_xml(sheet)
         ref = _cell_ref(col, row)
@@ -548,17 +602,23 @@ class XlsxZipWriter:
 
         self._save_sheet_xml(sheet, xml)
 
+    def _photo_media_path(self, slot: int) -> str:
+        """Media zip-path backing a photo slot, resolved from the drawing anchors.
+        Falls back to the legacy image{slot+3}.png only if anchors can't be read."""
+        return self._photo_slot_media().get(slot, f"xl/media/image{slot + 3}.png")
+
     def replace_photo(self, slot: int, image_bytes: bytes):
         """
-        Reemplaza una foto en el registro fotográfico de Resumen.
-        slot: 1-6 → xl/media/image4.png a image9.png
+        Reemplaza una foto en el registro fotográfico de Resumen. El archivo de
+        media destino se resuelve leyendo las anclas del dibujo (no se asume el
+        número), para que la foto caiga en el slot correcto y nunca sobre un logo.
         Convierte cualquier formato a PNG para compatibilidad.
         """
         from PIL import Image as PILImage
         img = PILImage.open(io.BytesIO(image_bytes))
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="PNG")
-        self._modified_media[f"xl/media/image{slot + 3}.png"] = buf.getvalue()
+        self._modified_media[self._photo_media_path(slot)] = buf.getvalue()
 
     def blank_photo(self, slot: int):
         """Deja en blanco el placeholder de una foto (slot 1-6) escribiendo una
@@ -566,10 +626,11 @@ class XlsxZipWriter:
         from PIL import Image as PILImage
         buf = io.BytesIO()
         PILImage.new("RGB", (800, 600), "white").save(buf, format="PNG")
-        self._modified_media[f"xl/media/image{slot + 3}.png"] = buf.getvalue()
+        self._modified_media[self._photo_media_path(slot)] = buf.getvalue()
 
     def save(self) -> bytes:
         output = io.BytesIO()
+        written = set()
         with zipfile.ZipFile(io.BytesIO(self._original), "r") as zin:
             with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zout:
                 for item in zin.infolist():
@@ -582,5 +643,11 @@ class XlsxZipWriter:
                     else:
                         data = zin.read(item.filename)
                     zout.writestr(item, data)
+                    written.add(item.filename)
+                # Re-create media files referenced by drawings but missing from the
+                # template (a broken chain can drop them), so anchors don't break.
+                for path, data in self._modified_media.items():
+                    if path not in written:
+                        zout.writestr(path, data)
         output.seek(0)
         return output.read()
