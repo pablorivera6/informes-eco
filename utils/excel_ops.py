@@ -218,6 +218,9 @@ def _update_fotos(w, form_data: dict):
         fecha_str = f"{d.day:02d}/{d.month:02d}/{d.year}"
     locacion = form_data.get("locacion_display", "Cusiana")
 
+    from utils.zip_writer import _cell_ref
+    valid_desc_refs = {_cell_ref(col, row) for row, col in _PHOTO_DESC_CELLS}
+
     for idx, (row, col) in enumerate(_PHOTO_DESC_CELLS):
         foto = fotos[idx] if idx < len(fotos) else {}
         img_bytes = foto.get("image_bytes")
@@ -232,6 +235,10 @@ def _update_fotos(w, form_data: dict):
             # para que no arrastre la foto/descr. del reporte anterior.
             w.blank_photo(idx + 1)
             w.set_text("Resumen", row, col, " ")
+
+    # Borrar descripciones fantasma (p.ej. AD34) que un template mal guardado
+    # dejó fuera de las 6 celdas válidas y aparecen como recuadros flotantes.
+    w.clear_stray_cells_with_prefix("Resumen", "Fecha:", valid_desc_refs)
 
 
 def _set_if(sheet, row, col, key, writer, form_data):

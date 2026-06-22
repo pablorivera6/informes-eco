@@ -468,6 +468,30 @@ class XlsxZipWriter:
         self._extra_parts[f"xl/drawings/_rels/{draw}.rels"] = drels2
         return mapping
 
+    def clear_stray_cells_with_prefix(self, sheet: str, prefix: str, keep_refs: set):
+        """Blank any string cell whose text starts with `prefix` and whose ref is
+        not in `keep_refs`. Used to wipe stale photo descriptions (e.g. a leftover
+        'Fecha:…' cell at AD34) that a mangled template chain left outside the
+        6 valid description cells, so they don't show up as floating boxes."""
+        bad_idx = {
+            i for i, t in enumerate(self._shared_strings) if t.startswith(prefix)
+        }
+        if not bad_idx:
+            return
+        xml = self._get_sheet_xml(sheet)
+
+        def repl(m):
+            ref, attrs, idxv = m.group(1), m.group(2), int(m.group(3))
+            if idxv in bad_idx and ref not in keep_refs:
+                clean = re.sub(r'\s*t="s"', "", attrs)  # no longer a string cell
+                return f'<c r="{ref}"{clean}/>'          # empty cell, keeps style
+            return m.group(0)
+
+        xml = re.sub(
+            r'<c r="([A-Z]+\d+)"([^>]*?)\st="s"[^>]*><v>(\d+)</v></c>', repl, xml
+        )
+        self._save_sheet_xml(sheet, xml)
+
     def set_number(self, sheet: str, row: int, col: int, value: float | int):
         xml = self._get_sheet_xml(sheet)
         ref = _cell_ref(col, row)
