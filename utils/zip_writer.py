@@ -324,14 +324,17 @@ class XlsxZipWriter:
 
     def _photo_slot_media(self) -> dict[int, str]:
         """
-        Resolve which media file backs each of the 6 photo slots by reading the
-        Resumen drawing anchors, instead of assuming image{slot+3}. Excel/Numbers
-        renumber media on save, so the hardcoded mapping put photos over logos;
-        reading the anchors makes placement correct for any numbering.
+        Resolve which media file backs each photo slot by reading the Resumen
+        drawing anchors, instead of assuming image{slot+3}. Excel/Numbers renumber
+        media on save, so the hardcoded mapping put photos over logos; reading the
+        anchors makes placement correct for any numbering.
 
-        Slots are ordered top→bottom, left→right (matching _PHOTO_DESC_CELLS):
-        rows 31/33/35 of Resumen, left column then right column.
-        Returns {slot(1-6): "xl/media/imageN.ext"}; empty dict if it can't parse.
+        Each anchor is mapped to its slot by ABSOLUTE position (not by sorted
+        index), so it works even when the previous report has fewer than 6 photos
+        and the drawing carries fewer anchors:
+            row band 0/1/2 (registry rows ~30/32/34) × side left/right
+            slot = band*2 + side + 1   →  1..6
+        Returns {slot: "xl/media/imageN.ext"} for whatever slots have an anchor.
         """
         if getattr(self, "_photo_map_cache", None) is not None:
             return self._photo_map_cache
@@ -349,7 +352,7 @@ class XlsxZipWriter:
                     m.group(1): "xl/media/" + m.group(2).split("/")[-1]
                     for m in re.finditer(r'Id="([^"]+)"[^>]*Target="([^"]+)"', drels)
                 }
-                anchors = []
+                photos = []
                 for anc in re.finditer(
                     r"<xdr:(twoCellAnchor|oneCellAnchor)\b.*?</xdr:\1>", dxml, re.DOTALL
                 ):
@@ -360,16 +363,23 @@ class XlsxZipWriter:
                     )
                     emb = re.search(r'r:embed="([^"]+)"', body)
                     if frm and emb and emb.group(1) in rid2media:
-                        anchors.append(
-                            (int(frm.group(2)), int(frm.group(1)), rid2media[emb.group(1)])
-                        )
-                # The photo registry lives below row 28; logos sit near the top.
-                photos = sorted(
-                    [a for a in anchors if a[0] >= 28], key=lambda a: (a[0], a[1])
-                )
-                if len(photos) == 6:
-                    for i, (_row, _col, media) in enumerate(photos):
-                        mapping[i + 1] = media
+                        col, row = int(frm.group(1)), int(frm.group(2))
+                        if row >= 28:  # photo registry; logos sit near the top
+                            photos.append((row, col, rid2media[emb.group(1)]))
+
+                # Map each anchor to its band by absolute row spacing from the top
+                # registry row (~2 rows apart). Using the spacing instead of a
+                # relative index stays correct even if a middle/bottom row has no
+                # photo (fewer anchors), which is the failing case for <4 photos.
+                if photos:
+                    top = min(r for r, _, _ in photos)
+                    for row, col, media in photos:
+                        band = (row - top) // 2
+                        if not (0 <= band <= 2):
+                            continue
+                        side = 0 if col < 12 else 1  # left vs right column
+                        slot = band * 2 + side + 1
+                        mapping.setdefault(slot, media)
         except Exception:
             mapping = {}
 
@@ -602,10 +612,18 @@ class XlsxZipWriter:
 
         self._save_sheet_xml(sheet, xml)
 
-    def _photo_media_path(self, slot: int) -> str:
+    def _photo_media_path(self, slot: int):
         """Media zip-path backing a photo slot, resolved from the drawing anchors.
-        Falls back to the legacy image{slot+3}.png only if anchors can't be read."""
-        return self._photo_slot_media().get(slot, f"xl/media/image{slot + 3}.png")
+
+        - If the anchors parsed: return the slot's media, or None when that slot
+          has no anchor (so the caller skips it instead of writing onto a logo).
+        - Only if the anchors couldn't be parsed at all do we fall back to the
+          legacy image{slot+3}.png guess.
+        """
+        media_map = self._photo_slot_media()
+        if media_map:
+            return media_map.get(slot)  # None → slot has no placeholder; skip
+        return f"xl/media/image{slot + 3}.png"
 
     def replace_photo(self, slot: int, image_bytes: bytes):
         """
@@ -614,19 +632,25 @@ class XlsxZipWriter:
         número), para que la foto caiga en el slot correcto y nunca sobre un logo.
         Convierte cualquier formato a PNG para compatibilidad.
         """
+        path = self._photo_media_path(slot)
+        if not path:
+            return  # ese slot no existe como placeholder en este formato
         from PIL import Image as PILImage
         img = PILImage.open(io.BytesIO(image_bytes))
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="PNG")
-        self._modified_media[self._photo_media_path(slot)] = buf.getvalue()
+        self._modified_media[path] = buf.getvalue()
 
     def blank_photo(self, slot: int):
         """Deja en blanco el placeholder de una foto (slot 1-6) escribiendo una
         imagen blanca, para que no arrastre la foto del reporte anterior."""
+        path = self._photo_media_path(slot)
+        if not path:
+            return
         from PIL import Image as PILImage
         buf = io.BytesIO()
         PILImage.new("RGB", (800, 600), "white").save(buf, format="PNG")
-        self._modified_media[self._photo_media_path(slot)] = buf.getvalue()
+        self._modified_media[path] = buf.getvalue()
 
     def save(self) -> bytes:
         output = io.BytesIO()
