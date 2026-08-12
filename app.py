@@ -16,7 +16,12 @@ from utils.excel_ops import (
     read_c_control_items,
     read_reporte_no,
     update_report,
+    verify_photos,
 )
+
+# Versión visible en la app: sirve para confirmar qué código está realmente
+# desplegado cuando se reporta una falla.
+APP_VERSION = "2026.08.12"
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -437,7 +442,8 @@ st.markdown(f"""
     </div>
     <div class="h-title">
         <h1>Informe Diario de Proyectos</h1>
-        <p>Ecopetrol &nbsp;&middot;&nbsp; Contrato CW309754 &nbsp;&middot;&nbsp; Protección Catódica de Colombia</p>
+        <p>Ecopetrol &nbsp;&middot;&nbsp; Contrato CW309754 &nbsp;&middot;&nbsp; Protección Catódica de Colombia
+        &nbsp;&middot;&nbsp; <span style="opacity:.6;">v{APP_VERSION}</span></p>
     </div>
     <div class="h-logos">
         <img src="{LOGO_ECO}" alt="Ecopetrol" style="height:36px;object-fit:contain;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.6));">
@@ -1095,7 +1101,12 @@ if generar:
             # Guardar el resultado: el botón de descarga provoca un rerun y, si se
             # dibujara dentro de este bloque, desaparecería al primer clic
             # obligando a regenerar el informe.
-            st.session_state.gen_result = (output_bytes, filename, _avance_debug)
+            # Red de seguridad: comprobar sobre el archivo ya generado que cada
+            # foto quedó en su espacio (y no repetida) antes de entregarlo.
+            _photo_problems = verify_photos(output_bytes, fotos_data)
+            st.session_state.gen_result = (
+                output_bytes, filename, _avance_debug, _photo_problems
+            )
             st.session_state.gen_error  = None
         except Exception as e:
             st.session_state.gen_result = None
@@ -1106,13 +1117,18 @@ if st.session_state.get("gen_error") is not None:
     _pill("err", f"Error al generar: {_e}")
     st.exception(_e)
 elif st.session_state.get("gen_result"):
-    _out, _filename, _debug = st.session_state.gen_result
+    _out, _filename, _debug, _photo_problems = st.session_state.gen_result
     st.markdown(
         '<div class="pill pill-ok" style="margin-bottom:14px;">'
         '<span class="pill-dot"></span>'
         'Informe generado correctamente. Descarga el archivo a continuación.</div>',
         unsafe_allow_html=True,
     )
+    if _photo_problems:
+        st.warning(
+            "⚠️ Revisa el registro fotográfico del archivo:\n\n- "
+            + "\n- ".join(_photo_problems)
+        )
     if _debug:
         with st.expander("Detalle avance acumulado (debug)", expanded=False):
             for line in _debug:

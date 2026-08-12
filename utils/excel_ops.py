@@ -1,5 +1,7 @@
 """Read and write operations on the formal Ecopetrol report Excel."""
 import copy
+import io
+import zipfile
 import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime, date
@@ -207,6 +209,52 @@ def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) 
     w.accumulate_recursos_hh()
 
     return w.save()
+
+
+def verify_photos(output_bytes: bytes, fotos: list[dict]) -> list[str]:
+    """Comprueba en el archivo YA generado que cada foto quedó en su espacio.
+
+    Devuelve una lista de problemas (vacía si todo está bien). Sirve de red de
+    seguridad: si alguna vez los espacios volvieran a compartir archivo, el
+    usuario lo ve en la app en vez de descubrirlo al abrir el Excel.
+    """
+    import hashlib
+    from utils.zip_writer import XlsxZipWriter
+
+    problems: list[str] = []
+    try:
+        w = XlsxZipWriter(output_bytes)
+        slot_media = w._photo_slot_media()
+        if not slot_media:
+            return ["No se pudieron localizar los espacios de foto en el formato."]
+
+        from PIL import Image as PILImage
+        from utils.zip_writer import _png_with_tag
+
+        with zipfile.ZipFile(io.BytesIO(output_bytes), "r") as zf:
+            names = set(zf.namelist())
+            for idx, foto in enumerate(fotos or []):
+                slot = idx + 1
+                src = foto.get("image_bytes")
+                if not src:
+                    continue
+                media = slot_media.get(slot)
+                if not media or media not in names:
+                    problems.append(f"Espacio {slot}: la imagen no quedó en el archivo.")
+                    continue
+                # La imagen escrita para un espacio es exactamente la foto de
+                # entrada re-codificada con la etiqueta de ese espacio; si no
+                # coincide, ahí quedó otra foto (espacios pisándose).
+                esperado = _png_with_tag(
+                    PILImage.open(io.BytesIO(src)).convert("RGB"), slot
+                )
+                if hashlib.md5(zf.read(media)).hexdigest() != hashlib.md5(esperado).hexdigest():
+                    problems.append(
+                        f"Espacio {slot}: la imagen del archivo no corresponde a la foto elegida."
+                    )
+    except Exception as e:      # la verificación nunca debe romper la descarga
+        problems.append(f"No se pudo verificar el registro fotográfico: {e}")
+    return problems
 
 
 def _update_fotos(w, form_data: dict):
