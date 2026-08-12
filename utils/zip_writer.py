@@ -137,6 +137,22 @@ _CELL_RE_TEMPLATE = (
 )
 
 
+def _png_with_tag(img, slot: int) -> bytes:
+    """Encode an image as PNG carrying a per-slot metadata tag.
+
+    The tag makes each slot's file byte-unique without altering a single pixel.
+    Excel merges byte-identical media when it saves, which would otherwise point
+    several photo anchors at one file and make the same picture repeat across the
+    report.
+    """
+    from PIL import PngImagePlugin
+    meta = PngImagePlugin.PngInfo()
+    meta.add_text("pcc_slot", str(slot))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", pnginfo=meta)
+    return buf.getvalue()
+
+
 def _get_cell_style(sheet_xml: str, ref: str) -> str:
     """Return the style attribute (e.g. ' s="356"') of a cell, or '' if none."""
     result = _find_cell(sheet_xml, ref)
@@ -396,39 +412,115 @@ class XlsxZipWriter:
                         mapping.setdefault(slot, rid2media[emb.group(1)])
                         slot_anchor.setdefault(slot, body)
 
+                    # Excel de-duplicates byte-identical media on save, which
+                    # collapses several slots onto ONE image file. Writing a photo
+                    # to a shared file then overwrites the other slots, so the same
+                    # picture shows up in every one of them. Give each affected
+                    # slot its own file before anything is written.
+                    if slot_anchor:
+                        mapping, dxml, drels = self._split_shared_photo_media(
+                            dxml, drels, slot_anchor, mapping
+                        )
+
                     # Rebuild any missing slot by cloning a same-side anchor and
                     # shifting it to the right row band, so the report works for
                     # ANY photo count even if a template lost some anchors.
                     missing = [s for s in range(1, 7) if s not in mapping]
                     if missing and slot_anchor:
-                        mapping = self._rebuild_photo_anchors(
-                            draw, dxml, drels, rid2media, slot_anchor, top, mapping
+                        mapping, dxml, drels = self._rebuild_photo_anchors(
+                            dxml, drels, slot_anchor, top, mapping
                         )
+
+                    if slot_anchor:
+                        self._extra_parts[f"xl/drawings/{draw}"] = dxml
+                        self._extra_parts[f"xl/drawings/_rels/{draw}.rels"] = drels
         except Exception:
             mapping = {}
 
         self._photo_map_cache = mapping
         return mapping
 
-    def _rebuild_photo_anchors(self, draw, dxml, drels, rid2media,
-                               slot_anchor, top, mapping) -> dict[int, str]:
+    def _next_ids(self, dxml: str, drels: str):
+        """Next free image number / relationship id / drawing shape id."""
+        with zipfile.ZipFile(io.BytesIO(self._original), "r") as zf:
+            nums = [int(m.group(1)) for m in
+                    (re.search(r"image(\d+)", n) for n in zf.namelist()) if m]
+        nums += [int(m.group(1)) for m in
+                 (re.search(r"image(\d+)", p) for p in self._modified_media) if m]
+        return (
+            (max(nums) + 1 if nums else 1),
+            max([int(m.group(1)) for m in re.finditer(r'Id="rId(\d+)"', drels)] or [0]) + 1,
+            max([int(m.group(1)) for m in re.finditer(r'<xdr:cNvPr id="(\d+)"', dxml)] or [1]) + 1,
+        )
+
+    def _split_shared_photo_media(self, dxml, drels, slot_anchor, mapping):
+        """Ensure every photo slot owns a distinct media file.
+
+        Blank/identical placeholders get merged into one file by Excel, leaving
+        several anchors pointing at the same image; each new photo would then
+        overwrite the previous one and the report would repeat a single picture.
+        Slots after the first that share a file get a fresh (byte-unique) copy
+        and a new relationship, with their anchor re-pointed at it.
+        """
+        seen: dict[str, int] = {}
+        dupes = []
+        for slot in sorted(mapping):
+            media = mapping[slot]
+            if media in seen:
+                dupes.append(slot)
+            else:
+                seen[media] = slot
+        if not dupes:
+            return mapping, dxml, drels
+
+        next_img, next_rid, _ = self._next_ids(dxml, drels)
+        new_rels = []
+        for slot in dupes:
+            anchor = slot_anchor.get(slot)
+            if not anchor:
+                continue
+            media = f"xl/media/image{next_img}.png"
+            rid = f"rId{next_rid}"
+            self._modified_media[media] = self._unique_image_bytes(mapping[slot], slot)
+            dxml = dxml.replace(
+                anchor, re.sub(r'r:embed="[^"]+"', f'r:embed="{rid}"', anchor, count=1), 1
+            )
+            new_rels.append(
+                f'<Relationship Id="{rid}" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                f'relationships/image" Target="../media/image{next_img}.png"/>'
+            )
+            mapping[slot] = media
+            next_img += 1
+            next_rid += 1
+
+        drels = drels.replace("</Relationships>", "".join(new_rels) + "</Relationships>")
+        return mapping, dxml, drels
+
+    def _unique_image_bytes(self, src_media: str, slot: int) -> bytes:
+        """Copy of an existing media file, re-encoded so its bytes are unique to
+        this slot (keeps Excel from merging the copies back together)."""
+        from PIL import Image as PILImage
+        data = self._modified_media.get(src_media)
+        if data is None:
+            try:
+                with zipfile.ZipFile(io.BytesIO(self._original), "r") as zf:
+                    data = zf.read(src_media)
+            except Exception:
+                data = None
+        try:
+            img = PILImage.open(io.BytesIO(data)).convert("RGB")
+        except Exception:
+            img = PILImage.new("RGB", (800, 600), "white")
+        return _png_with_tag(img, slot)
+
+    def _rebuild_photo_anchors(self, dxml, drels, slot_anchor, top, mapping):
         """Synthesize anchors for missing photo slots by cloning an existing one
         on the same side (left/right) and moving it to the slot's row band. Adds a
-        white image + relationship for each, and stores the modified drawing/rels
-        so save() persists them. Returns the completed slot→media map."""
-        # Highest existing image number across the whole package.
-        with zipfile.ZipFile(io.BytesIO(self._original), "r") as zf:
-            nums = [int(re.search(r"image(\d+)", n).group(1))
-                    for n in zf.namelist() if re.search(r"xl/media/image\d+", n)]
-        next_img = max(nums) + 1 if nums else 1
-        next_rid = max(
-            [int(m.group(1)) for m in re.finditer(r'Id="rId(\d+)"', drels)] or [0]
-        ) + 1
-        next_cnv = max(
-            [int(m.group(1)) for m in re.finditer(r'<xdr:cNvPr id="(\d+)"', dxml)] or [1]
-        ) + 1
-
+        blank image + relationship for each. Returns (mapping, dxml, drels)."""
         from PIL import Image as PILImage
+        next_img, next_rid, next_cnv = self._next_ids(dxml, drels)
+
         new_anchors, new_rels = [], []
         for slot in [s for s in range(1, 7) if s not in mapping]:
             band, side = (slot - 1) // 2, (slot - 1) % 2
@@ -438,9 +530,9 @@ class XlsxZipWriter:
 
             media = f"xl/media/image{next_img}.png"
             rid = f"rId{next_rid}"
-            buf = io.BytesIO()
-            PILImage.new("RGB", (800, 600), "white").save(buf, format="PNG")
-            self._modified_media[media] = buf.getvalue()
+            self._modified_media[media] = _png_with_tag(
+                PILImage.new("RGB", (800, 600), "white"), slot
+            )
 
             anc = ref
             anc = re.sub(r'(<xdr:from>.*?<xdr:row>)\d+(</xdr:row>)',
@@ -462,11 +554,9 @@ class XlsxZipWriter:
             next_rid += 1
             next_cnv += 1
 
-        dxml2 = dxml.replace("</xdr:wsDr>", "".join(new_anchors) + "</xdr:wsDr>")
-        drels2 = drels.replace("</Relationships>", "".join(new_rels) + "</Relationships>")
-        self._extra_parts[f"xl/drawings/{draw}"] = dxml2
-        self._extra_parts[f"xl/drawings/_rels/{draw}.rels"] = drels2
-        return mapping
+        dxml = dxml.replace("</xdr:wsDr>", "".join(new_anchors) + "</xdr:wsDr>")
+        drels = drels.replace("</Relationships>", "".join(new_rels) + "</Relationships>")
+        return mapping, dxml, drels
 
     def clear_stray_cells_with_prefix(self, sheet: str, prefix: str, keep_refs: set):
         """Blank any string cell whose text starts with `prefix` and whose ref is
@@ -742,10 +832,10 @@ class XlsxZipWriter:
         if not path:
             return  # ese slot no existe como placeholder en este formato
         from PIL import Image as PILImage
-        img = PILImage.open(io.BytesIO(image_bytes))
-        buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="PNG")
-        self._modified_media[path] = buf.getvalue()
+        img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+        # Etiqueta por slot: mantiene el archivo byte-único aunque la misma foto
+        # se use en dos espacios, para que Excel no los fusione al guardar.
+        self._modified_media[path] = _png_with_tag(img, slot)
 
     def blank_photo(self, slot: int):
         """Deja en blanco el placeholder de una foto (slot 1-6) escribiendo una
@@ -754,9 +844,9 @@ class XlsxZipWriter:
         if not path:
             return
         from PIL import Image as PILImage
-        buf = io.BytesIO()
-        PILImage.new("RGB", (800, 600), "white").save(buf, format="PNG")
-        self._modified_media[path] = buf.getvalue()
+        self._modified_media[path] = _png_with_tag(
+            PILImage.new("RGB", (800, 600), "white"), slot
+        )
 
     def save(self) -> bytes:
         output = io.BytesIO()

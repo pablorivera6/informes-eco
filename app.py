@@ -783,8 +783,10 @@ st.markdown("""
 ff_locacion    = ff.get("locacion", "")
 active_section = detect_section(ff_locacion)
 
-wb_data      = openpyxl.load_workbook(io.BytesIO(st.session_state.report_bytes), data_only=True)
-date_col_num = find_date_column(wb_data, fecha_informe)
+# Reutilizar el workbook ya cargado en session_state. Volver a abrirlo aquí
+# costaba ~27 s y ~243 MB EN CADA rerun (cada tecla / cada clic), lo que agotaba
+# la memoria de Streamlit Cloud: la app se reiniciaba sola y perdía los archivos.
+date_col_num = find_date_column(wb, fecha_informe)
 
 ic1, ic2 = st.columns(2, gap="medium")
 with ic1:
