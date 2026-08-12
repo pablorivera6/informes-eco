@@ -1,5 +1,6 @@
 """Automatización de Informes Diarios — Proyecto Ecopetrol CW309754."""
 import base64
+import hashlib
 import io
 from datetime import date
 from pathlib import Path
@@ -445,12 +446,25 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
+# ff_sig / rpt_sig guardan la huella del archivo ya procesado: Streamlit reejecuta
+# el script completo en CADA interacción y el file_uploader sigue devolviendo el
+# archivo, así que sin esta guarda se re-parsearía el submission, se recargaría el
+# workbook (~27 s y ~243 MB) y se volverían a descargar las fotos por API en cada
+# tecla o clic — lo que agotaba la memoria y reiniciaba la app.
 for key, default in [
     ("ff_data", None), ("report_wb", None),
     ("report_bytes", None), ("report_items", []), ("ff_photos", []),
+    ("ff_sig", None), ("rpt_sig", None), ("ff_msg", None), ("rpt_msg", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+def _pill(kind: str, html: str):
+    st.markdown(
+        f'<div class="pill pill-{kind}"><span class="pill-dot"></span>{html}</div>',
+        unsafe_allow_html=True,
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PASO 1 — Cargar archivos
@@ -474,49 +488,46 @@ with col_a:
         "Submission", type=["xlsx"], key="ff_upload", label_visibility="collapsed",
     )
     if ff_file:
-        try:
-            ff_bytes = ff_file.read()
-            st.session_state.ff_data = parse_submission(io.BytesIO(ff_bytes))
-            fd = st.session_state.ff_data
+        # getvalue() no depende de la posición del stream (read() devolvería vacío
+        # en la segunda lectura del mismo objeto).
+        ff_bytes = ff_file.getvalue()
+        ff_sig   = hashlib.md5(ff_bytes).hexdigest()
+        if st.session_state.ff_sig != ff_sig:      # solo al cambiar el archivo
+            try:
+                st.session_state.ff_data = parse_submission(io.BytesIO(ff_bytes))
+                fd = st.session_state.ff_data
 
-            # Descargar fotos desde FastField API si hay credenciales configuradas
-            photo_filenames = [p["filename"] for p in fd.get("fotos", [])]
-            ff_email    = st.secrets.get("fastfield_email", "")
-            ff_password = st.secrets.get("fastfield_password", "")
-            ff_org_id   = st.secrets.get("fastfield_org_id", "")
-            ff_sub_key  = st.secrets.get("fastfield_subscription_key", "")
-            if photo_filenames and ff_email and ff_password:
-                with st.spinner(f"Descargando {len(photo_filenames)} foto(s) desde FastField..."):
-                    photo_bytes_list, api_err = download_submission_photos(
-                        photo_filenames, ff_email, ff_password, ff_org_id, ff_sub_key
-                    )
-                st.session_state.ff_photos = photo_bytes_list
-                n_ok = sum(1 for b in photo_bytes_list if b)
-                if n_ok > 0:
-                    st.markdown(
-                        f'<div class="pill pill-ok"><span class="pill-dot"></span>'
-                        f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; '
-                        f'{fd.get("locacion")} &nbsp;·&nbsp; {n_ok}/{len(photo_filenames)} fotos descargadas</div>',
-                        unsafe_allow_html=True,
-                    )
+                # Descargar fotos desde FastField API si hay credenciales configuradas
+                photo_filenames = [p["filename"] for p in fd.get("fotos", [])]
+                ff_email    = st.secrets.get("fastfield_email", "")
+                ff_password = st.secrets.get("fastfield_password", "")
+                ff_org_id   = st.secrets.get("fastfield_org_id", "")
+                ff_sub_key  = st.secrets.get("fastfield_subscription_key", "")
+                if photo_filenames and ff_email and ff_password:
+                    with st.spinner(f"Descargando {len(photo_filenames)} foto(s) desde FastField..."):
+                        photo_bytes_list, api_err = download_submission_photos(
+                            photo_filenames, ff_email, ff_password, ff_org_id, ff_sub_key
+                        )
+                    st.session_state.ff_photos = photo_bytes_list
+                    n_ok = sum(1 for b in photo_bytes_list if b)
+                    if n_ok > 0:
+                        st.session_state.ff_msg = ("ok",
+                            f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; '
+                            f'{fd.get("locacion")} &nbsp;·&nbsp; {n_ok}/{len(photo_filenames)} fotos descargadas')
+                    else:
+                        st.session_state.ff_msg = ("warn",
+                            f'Cargado &mdash; fotos no descargadas. Error: <code>{api_err}</code>')
                 else:
-                    st.markdown(
-                        f'<div class="pill pill-warn"><span class="pill-dot"></span>'
-                        f'Cargado &mdash; fotos no descargadas. Error: <code>{api_err}</code></div>',
-                        unsafe_allow_html=True,
-                    )
-            else:
-                st.session_state.ff_photos = []
-                st.markdown(
-                    f'<div class="pill pill-ok"><span class="pill-dot"></span>'
-                    f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> &nbsp;·&nbsp; {fd.get("locacion")}</div>',
-                    unsafe_allow_html=True,
-                )
-        except Exception as e:
-            st.markdown(
-                f'<div class="pill pill-err"><span class="pill-dot"></span>Error: {e}</div>',
-                unsafe_allow_html=True,
-            )
+                    st.session_state.ff_photos = []
+                    st.session_state.ff_msg = ("ok",
+                        f'Cargado &mdash; <strong>{fd.get("fecha_informe")}</strong> '
+                        f'&nbsp;·&nbsp; {fd.get("locacion")}')
+                st.session_state.ff_sig = ff_sig
+            except Exception as e:
+                st.session_state.ff_sig = None      # reintentar si vuelve a subirlo
+                st.session_state.ff_msg = ("err", f"Error: {e}")
+        if st.session_state.ff_msg:
+            _pill(*st.session_state.ff_msg)
 
 with col_b:
     st.markdown('<div class="upload-label">Reporte formal (plantilla)</div>', unsafe_allow_html=True)
@@ -525,25 +536,28 @@ with col_b:
         "Plantilla", type=["xlsx"], key="rpt_upload", label_visibility="collapsed",
     )
     if rpt_file:
-        try:
-            rpt_bytes = rpt_file.read()
-            st.session_state.report_bytes = rpt_bytes
-            st.session_state.report_wb = openpyxl.load_workbook(
-                io.BytesIO(rpt_bytes), data_only=True
-            )
-            st.session_state.report_items = read_c_control_items(st.session_state.report_wb)
-            current_no = read_reporte_no(st.session_state.report_wb)
-            st.markdown(
-                f'<div class="pill pill-ok"><span class="pill-dot"></span>'
-                f'Reporte N.° <strong>{current_no}</strong> &nbsp;·&nbsp; '
-                f'<strong>{len(st.session_state.report_items)}</strong> ítems en C.Control</div>',
-                unsafe_allow_html=True,
-            )
-        except Exception as e:
-            st.markdown(
-                f'<div class="pill pill-err"><span class="pill-dot"></span>Error: {e}</div>',
-                unsafe_allow_html=True,
-            )
+        rpt_bytes = rpt_file.getvalue()
+        rpt_sig   = hashlib.md5(rpt_bytes).hexdigest()
+        if st.session_state.rpt_sig != rpt_sig:     # solo al cambiar el archivo
+            try:
+                with st.spinner("Leyendo el reporte anterior..."):
+                    st.session_state.report_bytes = rpt_bytes
+                    st.session_state.report_wb = openpyxl.load_workbook(
+                        io.BytesIO(rpt_bytes), data_only=True
+                    )
+                    st.session_state.report_items = read_c_control_items(
+                        st.session_state.report_wb
+                    )
+                current_no = read_reporte_no(st.session_state.report_wb)
+                st.session_state.rpt_sig = rpt_sig
+                st.session_state.rpt_msg = ("ok",
+                    f'Reporte N.° <strong>{current_no}</strong> &nbsp;·&nbsp; '
+                    f'<strong>{len(st.session_state.report_items)}</strong> ítems en C.Control')
+            except Exception as e:
+                st.session_state.rpt_sig = None     # reintentar si vuelve a subirlo
+                st.session_state.rpt_msg = ("err", f"Error: {e}")
+        if st.session_state.rpt_msg:
+            _pill(*st.session_state.rpt_msg)
 
 if st.session_state.ff_data is None or st.session_state.report_wb is None:
     st.markdown(
@@ -717,7 +731,9 @@ for row_idx in range(0, FOTO_SLOTS, 2):
                     label_visibility="collapsed",
                 )
                 if img_file:
-                    img_bytes = img_file.read()
+                    # getvalue(): read() devolvería b"" en reruns posteriores y la
+                    # foto cargada a mano se perdería silenciosamente.
+                    img_bytes = img_file.getvalue()
                     st.image(img_bytes, use_container_width=True)
                 else:
                     st.markdown(
@@ -1015,21 +1031,22 @@ if generar:
             _today_pct = _today_value / float(_I13)
             _avance_debug.append(f"Valor hoy: {_today_value:,.2f} / {float(_I13):,.2f} = {_today_pct:.6f}")
 
+            # Buscar hacia atrás el ÚLTIMO acumulado con valor. Mirar solo la
+            # columna inmediatamente anterior fallaba tras un día sin reporte
+            # (fin de semana o festivo): esa celda tiene fórmula pero sin valor
+            # calculado, se leía 0 y el acumulado se reiniciaba, desplomando la
+            # Curva S cada lunes.
             _prev_acum = 0.0
             _date_col_prev = find_date_column(wb, fecha_informe)
-            if _date_col_prev:
-                _prev_col = _date_col_prev - 1
-                if _prev_col >= 16:
-                    _v = _ws_cc.cell(row=8, column=_prev_col).value
-                    _prev_acum = float(_v) if isinstance(_v, (int, float)) else 0.0
-                    _avance_debug.append(f"Acum. anterior (col {_prev_col}): {_prev_acum:.6f} (raw: {_v})")
+            _scan_from = (_date_col_prev - 1) if _date_col_prev else _ws_cc.max_column
+            for _c in range(_scan_from, 15, -1):
+                _v = _ws_cc.cell(row=8, column=_c).value
+                if isinstance(_v, (int, float)) and _v > 0:
+                    _prev_acum = float(_v)
+                    _avance_debug.append(f"Acum. anterior (col {_c}): {_prev_acum:.6f}")
+                    break
             else:
-                for _c in range(_ws_cc.max_column, 15, -1):
-                    _v = _ws_cc.cell(row=8, column=_c).value
-                    if isinstance(_v, (int, float)) and _v > 0:
-                        _prev_acum = float(_v)
-                        _avance_debug.append(f"Acum. anterior (col {_c}): {_prev_acum:.6f}")
-                        break
+                _avance_debug.append("Sin acumulado previo encontrado — se toma 0")
 
             _avance_acum = _prev_acum + _today_pct
             _avance_debug.append(f"Total: {_prev_acum:.6f} + {_today_pct:.6f} = {_avance_acum:.6f} ({_avance_acum*100:.2f}%)")
@@ -1075,29 +1092,37 @@ if generar:
             )
             fecha_str = fecha_informe.strftime("%d-%m-%Y")
             filename  = f"{int(reporte_no)}_{contrato}_Reporte_Diario_{fecha_str}.xlsx"
-
-            st.markdown(
-                '<div class="pill pill-ok" style="margin-bottom:14px;">'
-                '<span class="pill-dot"></span>'
-                'Informe generado correctamente. Descarga el archivo a continuación.</div>',
-                unsafe_allow_html=True,
-            )
-            if _avance_debug:
-                with st.expander("Detalle avance acumulado (debug)", expanded=False):
-                    for line in _avance_debug:
-                        st.text(line)
-            dl_col, _ = st.columns([2, 3])
-            with dl_col:
-                st.download_button(
-                    label="Descargar informe Excel",
-                    data=output_bytes,
-                    file_name=filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
+            # Guardar el resultado: el botón de descarga provoca un rerun y, si se
+            # dibujara dentro de este bloque, desaparecería al primer clic
+            # obligando a regenerar el informe.
+            st.session_state.gen_result = (output_bytes, filename, _avance_debug)
+            st.session_state.gen_error  = None
         except Exception as e:
-            st.markdown(
-                f'<div class="pill pill-err"><span class="pill-dot"></span>Error al generar: {e}</div>',
-                unsafe_allow_html=True,
-            )
-            st.exception(e)
+            st.session_state.gen_result = None
+            st.session_state.gen_error  = e
+
+if st.session_state.get("gen_error") is not None:
+    _e = st.session_state.gen_error
+    _pill("err", f"Error al generar: {_e}")
+    st.exception(_e)
+elif st.session_state.get("gen_result"):
+    _out, _filename, _debug = st.session_state.gen_result
+    st.markdown(
+        '<div class="pill pill-ok" style="margin-bottom:14px;">'
+        '<span class="pill-dot"></span>'
+        'Informe generado correctamente. Descarga el archivo a continuación.</div>',
+        unsafe_allow_html=True,
+    )
+    if _debug:
+        with st.expander("Detalle avance acumulado (debug)", expanded=False):
+            for line in _debug:
+                st.text(line)
+    dl_col, _ = st.columns([2, 3])
+    with dl_col:
+        st.download_button(
+            label="Descargar informe Excel",
+            data=_out,
+            file_name=_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
