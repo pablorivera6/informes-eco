@@ -15,15 +15,15 @@ def parse_submission(file_bytes) -> dict:
     root    = dict(zip(headers, values))
 
     data["fecha_informe"]    = _parse_date(root.get("Fecha del informe"))
-    data["cliente"]          = root.get("Cliente", "Ecopetrol")
-    data["locacion"]         = root.get("Locacion", "")
-    data["profesional_lider"]= root.get("Profesional Lider PCC", "")
-    data["contrato"]         = root.get("Contrato/Orden de servicio", "")
-    data["objeto_contrato"]  = root.get("Objeto contrato", "")
-    data["charla_diaria"]    = root.get("Charla Diaria", "")
-    data["evento"]           = root.get("Evento ", "")
-    data["hora_inicio"]      = root.get("Hora inicio", "")
-    data["hora_fin"]         = root.get("Hora Fin", "")
+    data["cliente"]          = _text(root.get("Cliente"), "Ecopetrol")
+    data["locacion"]         = _text(root.get("Locacion"))
+    data["profesional_lider"]= _text(root.get("Profesional Lider PCC"))
+    data["contrato"]         = _text(root.get("Contrato/Orden de servicio"))
+    data["objeto_contrato"]  = _text(root.get("Objeto contrato"))
+    data["charla_diaria"]    = _text(root.get("Charla Diaria"))
+    data["evento"]           = _text(root.get("Evento "))
+    data["hora_inicio"]      = _text(root.get("Hora inicio"))
+    data["hora_fin"]         = _text(root.get("Hora Fin"))
 
     # HH — puede venir como número (8) o texto ("7.5 Hrs")
     hh_raw = root.get("Horas hombre") or root.get("Horas Hombre") or ""
@@ -48,6 +48,20 @@ def parse_submission(file_bytes) -> dict:
 
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
+
+def _text(val, default: str = "") -> str:
+    """Valor de celda como texto siempre usable.
+
+    openpyxl devuelve None cuando la columna existe pero la celda está vacía, y
+    dict.get() solo aplica su default si FALTA la clave — no si el valor es None.
+    Sin esta normalización, un campo vacío en FastField llegaba como None y
+    reventaba al usarlo como texto (p. ej. charla_diaria.strip()).
+    """
+    if val is None:
+        return default
+    s = str(val).strip()
+    return s if s else default
+
 
 def _parse_date(val):
     if val is None:

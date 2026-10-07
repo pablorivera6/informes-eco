@@ -21,7 +21,7 @@ from utils.excel_ops import (
 
 # Versión visible en la app: sirve para confirmar qué código está realmente
 # desplegado cuando se reporta una falla.
-APP_VERSION = "2026.08.12"
+APP_VERSION = "2026.10.07"
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -466,6 +466,18 @@ for key, default in [
         st.session_state[key] = default
 
 
+def ff_val(key: str, default: str = "") -> str:
+    """Campo del submission como texto, cayendo al default si viene vacío.
+
+    ff.get(key, default) no basta: la clave existe siempre, así que un campo
+    vacío en FastField devolvía "" (antes None) y el default nunca se aplicaba,
+    dejando cosas como el contrato en blanco dentro del nombre del archivo.
+    """
+    val = st.session_state.ff_data.get(key) if st.session_state.ff_data else None
+    val = "" if val is None else str(val).strip()
+    return val or default
+
+
 def _pill(kind: str, html: str):
     st.markdown(
         f'<div class="pill pill-{kind}"><span class="pill-dot"></span>{html}</div>',
@@ -596,21 +608,21 @@ with c1:
 with c2:
     reporte_no = st.number_input("Número de reporte", min_value=1, value=current_reporte_no + 1, step=1)
 with c3:
-    contrato = st.text_input("Contrato / OS", value=ff.get("contrato", "CW309754"))
+    contrato = st.text_input("Contrato / OS", value=ff_val("contrato", "CW309754"))
 
 c4, c5 = st.columns(2, gap="medium")
 with c4:
-    profesional = st.text_input("Profesional líder PCC", value=ff.get("profesional_lider", ""))
+    profesional = st.text_input("Profesional líder PCC", value=ff_val("profesional_lider"))
 with c5:
-    locacion_display = st.text_input("Locación", value=ff.get("locacion", "Cusiana"))
+    locacion_display = st.text_input("Locación", value=ff_val("locacion", "Cusiana"))
 
-charla_diaria = st.text_input("Charla diaria", value=ff.get("charla_diaria", ""))
+charla_diaria = st.text_input("Charla diaria", value=ff_val("charla_diaria"))
 
 st.markdown('<div class="sub-label">Narrativas de avance</div>', unsafe_allow_html=True)
-loc_label = ff.get("locacion", "Locación")
+loc_label = ff_val("locacion", "Locación")
 
 # Texto HSE con plantilla fija — solo cambia la charla del día
-_charla = ff.get("charla_diaria", "").strip()
+_charla = ff_val("charla_diaria")
 _charla_linea = f"Charla pre-operacional: {_charla}" if _charla else "Charla pre-operacional:"
 _hse_default = (
     "Aseguramiento del área: Inspección y adecuación de las condiciones de seguridad en el entorno de trabajo.\n\n"
@@ -802,7 +814,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-ff_locacion    = ff.get("locacion", "")
+ff_locacion    = ff_val("locacion")
 active_section = detect_section(ff_locacion)
 
 # Reutilizar el workbook ya cargado en session_state. Volver a abrirlo aquí
