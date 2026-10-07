@@ -41,6 +41,10 @@ def parse_submission(file_bytes) -> dict:
     # subform_4: Ítems de pago con cantidades (nuevo campo estructurado)
     data["items_fastfield"] = _read_item_quantities(wb)
 
+    # Horas hombre por ubicación (subform nuevo, form v9+)
+    data["hh_ubicaciones"] = _read_hh_ubicaciones(wb)
+    data["hh_total"] = sum(f["hh"] for f in data["hh_ubicaciones"])
+
     # Photos
     data["fotos"] = _read_photos(wb)
 
@@ -48,6 +52,69 @@ def parse_submission(file_bytes) -> dict:
 
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
+
+def _norm(s) -> str:
+    """Encabezado normalizado: sin tildes, sin espacios extra, en minúsculas.
+
+    FastField exporta nombres con espacios al final y tildes inconsistentes
+    ('Ubicacion ', 'Número de horas '); comparar en crudo es frágil.
+    """
+    import unicodedata
+    txt = unicodedata.normalize("NFKD", str(s or ""))
+    txt = "".join(c for c in txt if not unicodedata.combining(c))
+    return " ".join(txt.split()).lower()
+
+
+def _find_col(headers, *candidatos):
+    """Índice de la primera columna cuyo encabezado normalizado coincide."""
+    norm = [_norm(h) for h in headers]
+    for cand in candidatos:
+        c = _norm(cand)
+        for i, h in enumerate(norm):
+            if h == c:
+                return i
+    for cand in candidatos:           # coincidencia parcial como respaldo
+        c = _norm(cand)
+        for i, h in enumerate(norm):
+            if c and c in h:
+                return i
+    return None
+
+
+def _read_hh_ubicaciones(wb) -> list[dict]:
+    """Lee el subform de horas hombre por ubicación.
+
+    Se localiza por sus COLUMNAS (ubicación + personas + horas), no por el
+    nombre de la hoja: FastField renumera los subforms al editar el formulario,
+    así que fijar 'subform_5' se rompería en la próxima versión del form.
+    """
+    for sheet in wb.sheetnames:
+        if not sheet.startswith("subform"):
+            continue
+        ws = wb[sheet]
+        headers = [c.value for c in ws[1]]
+        i_ubi = _find_col(headers, "Ubicacion", "Ubicación")
+        i_per = _find_col(headers, "Numero de personas", "Número de personas")
+        i_hrs = _find_col(headers, "Numero de horas", "Número de horas")
+        if i_ubi is None or i_per is None or i_hrs is None:
+            continue
+
+        filas = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            ubicacion = _text(row[i_ubi] if i_ubi < len(row) else None)
+            personas  = _to_float(row[i_per] if i_per < len(row) else None) or 0.0
+            horas     = _to_float(row[i_hrs] if i_hrs < len(row) else None) or 0.0
+            if not ubicacion or personas <= 0 or horas <= 0:
+                continue
+            filas.append({
+                "ubicacion": ubicacion,
+                "personas":  personas,
+                "horas":     horas,
+                "hh":        personas * horas,
+            })
+        return filas
+    return []
+
 
 def _text(val, default: str = "") -> str:
     """Valor de celda como texto siempre usable.

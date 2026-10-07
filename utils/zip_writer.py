@@ -31,26 +31,38 @@ def _get_sheet_map(zf: zipfile.ZipFile) -> dict[str, str]:
     wb_data   = zf.read("xl/workbook.xml").decode("utf-8")
     rels_data = zf.read("xl/_rels/workbook.xml.rels").decode("utf-8")
 
-    # Extract rId → target from rels (filter only worksheet type)
-    rid_target = {}
-    for m in re.finditer(
-        r'<Relationship[^>]+Id="([^"]+)"[^>]+Type="[^"]*worksheet[^"]*"[^>]+Target="([^"]+)"',
-        rels_data,
-    ):
-        rid, target = m.group(1), m.group(2)
-        if not target.startswith("xl/"):
-            target = "xl/" + target
-        rid_target[rid] = target
+    # rId → target (solo relaciones de hoja). Los atributos se leen por nombre,
+    # no por posición: el orden Id/Type/Target varía según quién generó el libro.
+    def _attrs(tag: str) -> dict:
+        return dict(re.findall(r'(\w+(?::\w+)?)="([^"]*)"', tag))
 
-    # Extract sheet name → rId from workbook.xml
+    rid_target = {}
+    for m in re.finditer(r"<Relationship\b[^>]*/?>", rels_data):
+        a = _attrs(m.group(0))
+        if "worksheet" not in a.get("Type", ""):
+            continue
+        target = a.get("Target", "")
+        if not target:
+            continue
+        target = target.lstrip("/")
+        if target.startswith("xl/"):
+            pass
+        elif target.startswith("../"):
+            target = "xl/" + target[3:]
+        else:
+            target = "xl/" + target
+        rid_target[a.get("Id", "")] = target
+
     sheet_map = {}
-    r_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-    for m in re.finditer(
-        r'<sheet\s[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"',
-        wb_data,
-    ):
-        name, rid = m.group(1), m.group(2)
-        if rid in rid_target:
+    # Sin prefijo de namespace a propósito: el resto del motor (regex sobre
+    # <c>, <row>, <sheetData>) no los soporta, y reconocer un libro con
+    # prefijos (p. ej. <x:sheet>, generado por librerías .NET) convertía un
+    # error claro en escrituras que se perdían en silencio.
+    for m in re.finditer(r"<sheet\b[^>]*/?>", wb_data):
+        a = _attrs(m.group(0))
+        name = a.get("name")
+        rid = a.get("r:id") or a.get("relationshipId") or a.get("id")
+        if name and rid in rid_target:
             sheet_map[name] = rid_target[rid]
 
     return sheet_map
@@ -60,7 +72,18 @@ def _get_sheet_map(zf: zipfile.ZipFile) -> dict[str, str]:
 
 def _load_shared_strings(zf: zipfile.ZipFile) -> tuple[list[str], str]:
     """Return (list_of_strings, raw_xml_bytes)."""
-    raw = zf.read("xl/sharedStrings.xml").decode("utf-8")
+    try:
+        raw = zf.read("xl/sharedStrings.xml").decode("utf-8")
+    except KeyError:
+        # Un libro sin texto compartido (p. ej. generado por otra herramienta)
+        # no trae esta parte; antes reventaba al abrir el archivo. Se devuelve un
+        # documento sst VÁLIDO y vacío para que añadir textos siga funcionando;
+        # save() se encarga de crear la parte y declararla si hiciera falta.
+        return [], (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+            ' count="0" uniqueCount="0"></sst>'
+        )
     strings = []
     for m in re.finditer(r"<si>(.*?)</si>", raw, re.DOTALL):
         # Extract all <t> texts and join (handles rich text / runs)
@@ -79,12 +102,14 @@ def _escape(text: str) -> str:
 
 
 def _unescape(text: str) -> str:
-    return (
-        text.replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", '"')
-    )
+    """Decodifica entidades XML, incluidas las referencias numéricas.
+
+    Algunas herramientas escriben los acentos como referencias (&#209; = Ñ), así
+    que quedarse en las 4 entidades básicas dejaba textos como 'FLORE&#209;A'
+    sin decodificar y rompía las comparaciones por nombre.
+    """
+    import html
+    return html.unescape(text)
 
 
 def _add_shared_string(strings: list[str], ss_xml: str, text: str) -> tuple[int, str]:
@@ -759,6 +784,101 @@ class XlsxZipWriter:
 
         self._save_sheet_xml(sheet, xml)
 
+    def _cell_text(self, xml: str, ref: str) -> str:
+        """Texto de una celda, resolviendo shared strings."""
+        res = _find_cell(xml, ref)
+        if not res:
+            return ""
+        _, attrs, content, _ = res
+        if 't="inlineStr"' in attrs:          # texto embebido, sin shared strings
+            t = re.search(r"<is>.*?<t[^>]*>(.*?)</t>", content, re.DOTALL)
+            return _unescape(t.group(1)) if t else ""
+        v = re.search(r"<v>([^<]*)</v>", content)
+        if not v or not v.group(1):
+            return ""
+        if 't="s"' in attrs:
+            try:
+                return self._shared_strings[int(v.group(1))]
+            except (ValueError, IndexError):
+                return ""
+        return v.group(1)
+
+    def find_recursos_columns(self, ubicaciones, sheet: str = "Recursos",
+                              header_rows=range(10, 21), max_col: int = 30) -> dict:
+        """Mapea cada ubicación a SU columna en Recursos leyendo los encabezados.
+
+        Se busca el texto en la hoja en vez de fijar F/G/H: la plantilla trae
+        erratas ('CUSINA' por 'CUSIANA') y las columnas podrían moverse, así que
+        se compara de forma tolerante (sin tildes/mayúsculas y por similitud).
+        """
+        import difflib
+        if sheet not in self._sheet_map:
+            return {}
+        xml = self._get_sheet_xml(sheet)
+
+        def norm(t):
+            import unicodedata
+            t = unicodedata.normalize("NFKD", str(t or ""))
+            t = "".join(c for c in t if not unicodedata.combining(c))
+            return " ".join(t.split()).lower()
+
+        objetivo = {norm(u): u for u in ubicaciones}
+        encontrado: dict[str, int] = {}
+        for row in header_rows:
+            for col in range(1, max_col + 1):
+                txt = norm(self._cell_text(xml, _cell_ref(col, row)))
+                if not txt:
+                    continue
+                for key, original in objetivo.items():
+                    if original in encontrado:
+                        continue
+                    if txt == key or difflib.SequenceMatcher(None, txt, key).ratio() >= 0.8:
+                        encontrado[original] = col
+        return encontrado
+
+    def accumulate_recursos_hh_por_ubicacion(self, horas_por_ubicacion: dict,
+                                             sheet: str = "Recursos",
+                                             row_start: int = 15,
+                                             row_end: int = 46) -> dict:
+        """Suma las horas del día de cada ubicación en la columna de ese frente.
+
+        Misma semántica que accumulate_recursos_hh (que cargaba TODO a Cusiana),
+        pero repartiendo: a cada fila de recurso activa en un frente se le suman
+        las horas trabajadas en ese frente. Devuelve {ubicacion: columna} de lo
+        que efectivamente se escribió.
+        """
+        if sheet not in self._sheet_map or not horas_por_ubicacion:
+            return {}
+        cols = self.find_recursos_columns(list(horas_por_ubicacion), sheet=sheet)
+        if not cols:
+            return {}
+
+        xml = self._get_sheet_xml(sheet)
+        aplicado = {}
+        for ubicacion, col in cols.items():
+            horas = float(horas_por_ubicacion.get(ubicacion) or 0)
+            if horas <= 0:
+                continue
+            for row in range(row_start, row_end + 1):
+                ref = _cell_ref(col, row)
+                res = _find_cell(xml, ref)
+                if not res:
+                    continue
+                v = re.search(r"<v>([^<]*)</v>", res[2])
+                if not v or not v.group(1):
+                    continue
+                try:
+                    actual = float(v.group(1))
+                except ValueError:
+                    continue
+                if actual <= 0:
+                    continue
+                xml = _set_cell_number(xml, ref, actual + horas)
+            aplicado[ubicacion] = col
+
+        self._save_sheet_xml(sheet, xml)
+        return aplicado
+
     def accumulate_recursos_hh(self,
                                sheet: str = "Recursos",
                                hh_col: int = 5,    # columna E  → E$11 (Cantidad Horas día)
@@ -857,9 +977,30 @@ class XlsxZipWriter:
 
         with zipfile.ZipFile(io.BytesIO(self._original), "r") as zin:
             with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zout:
+                needs_ss_part = (
+                    "xl/sharedStrings.xml" not in set(zin.namelist())
+                    and bool(self._shared_strings)
+                )
                 for item in zin.infolist():
                     if item.filename == "xl/sharedStrings.xml":
                         data = self._ss_xml.encode("utf-8")
+                    elif needs_ss_part and item.filename == "[Content_Types].xml":
+                        data = zin.read(item.filename).decode("utf-8").replace(
+                            "</Types>",
+                            '<Override PartName="/xl/sharedStrings.xml" ContentType='
+                            '"application/vnd.openxmlformats-officedocument.'
+                            'spreadsheetml.sharedStrings+xml"/></Types>',
+                        ).encode("utf-8")
+                    elif needs_ss_part and item.filename == "xl/_rels/workbook.xml.rels":
+                        rels = zin.read(item.filename).decode("utf-8")
+                        used = [int(m.group(1)) for m in re.finditer(r'Id="rId(\d+)"', rels)]
+                        new_id = f"rId{(max(used) + 1) if used else 1}"
+                        data = rels.replace(
+                            "</Relationships>",
+                            f'<Relationship Id="{new_id}" Type="http://schemas.'
+                            'openxmlformats.org/officeDocument/2006/relationships/'
+                            'sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+                        ).encode("utf-8")
                     elif item.filename in self._modified_sheets:
                         data = self._modified_sheets[item.filename].encode("utf-8")
                     elif item.filename in self._extra_parts:
@@ -880,5 +1021,10 @@ class XlsxZipWriter:
                     if path not in written:
                         zout.writestr(path, _bytes(data))
                         written.add(path)
+                # Si el libro no traía sharedStrings pero se añadieron textos,
+                # hay que crear la parte Y declararla; sin esto las celdas t="s"
+                # apuntarían a índices inexistentes y el archivo abriría corrupto.
+                if "xl/sharedStrings.xml" not in written and self._shared_strings:
+                    zout.writestr("xl/sharedStrings.xml", self._ss_xml.encode("utf-8"))
         output.seek(0)
         return output.read()

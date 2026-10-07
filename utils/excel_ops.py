@@ -205,8 +205,16 @@ def update_report(template_bytes, form_data: dict, item_quantities: list[dict]) 
     # ── Fotos ──────────────────────────────────────────────────────────────────
     _update_fotos(w, form_data)
 
-    # ── Recursos — acumular HH del día en columna F ─────────────────────────
-    w.accumulate_recursos_hh()
+    # ── Recursos — acumular horas del día por frente ─────────────────────────
+    # Con el subform de HH por ubicación, cada frente recibe SUS horas. Sin él
+    # (submissions antiguos) se mantiene el comportamiento previo: todo a Cusiana.
+    _horas_por_ubic = form_data.get("horas_por_ubicacion") or {}
+    if _horas_por_ubic:
+        form_data["_recursos_cols_aplicadas"] = (
+            w.accumulate_recursos_hh_por_ubicacion(_horas_por_ubic)
+        )
+    else:
+        w.accumulate_recursos_hh()
 
     return w.save()
 

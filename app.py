@@ -21,7 +21,7 @@ from utils.excel_ops import (
 
 # Versión visible en la app: sirve para confirmar qué código está realmente
 # desplegado cuando se reporta una falla.
-APP_VERSION = "2026.10.07"
+APP_VERSION = "2026.10.07b"
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -657,12 +657,43 @@ with pc3:
 with pc4:
     equipo = st.number_input("Equipo (und.)", min_value=0, value=1, step=1)
 
-hh_dia = st.number_input(
-    "HH registradas en el día",
-    min_value=0.0,
-    value=float(ff.get("horas_hombre") or 0.0),
-    step=0.5,
-)
+# ── Horas hombre ──────────────────────────────────────────────────────────────
+# El formulario trae un subform repetible con (ubicación, personas, horas), para
+# cuando se trabaja en varios frentes el mismo día. Si viene, manda ese detalle;
+# si no (submissions antiguos), se cae al campo manual de siempre.
+hh_rows = ff.get("hh_ubicaciones") or []
+
+if hh_rows:
+    st.markdown('<div class="sub-label">Horas hombre por frente</div>', unsafe_allow_html=True)
+    st.dataframe(
+        pd.DataFrame([{
+            "Ubicación": r["ubicacion"],
+            "Personas":  int(r["personas"]),
+            "Horas":     r["horas"],
+            "HH":        r["hh"],
+        } for r in hh_rows]),
+        use_container_width=True, hide_index=True,
+    )
+    horas_por_ubicacion = {}
+    for r in hh_rows:
+        horas_por_ubicacion[r["ubicacion"]] = horas_por_ubicacion.get(r["ubicacion"], 0.0) + r["horas"]
+    hh_total_form = float(ff.get("hh_total") or 0.0)
+    hh_dia = st.number_input(
+        "HH registradas en el día (total)",
+        min_value=0.0,
+        value=hh_total_form,
+        step=0.5,
+        help="Calculado como la suma de personas × horas de cada frente. Puedes ajustarlo.",
+    )
+else:
+    horas_por_ubicacion = {}
+    hh_dia = st.number_input(
+        "HH registradas en el día",
+        min_value=0.0,
+        value=float(ff.get("horas_hombre") or 0.0),
+        step=0.5,
+        help="Se multiplicará por el total de personal en campo.",
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PASO 3 — HSE
@@ -1026,9 +1057,10 @@ with gen_col:
     generar = st.button("Generar informe", type="primary", use_container_width=True)
 
 if generar:
-    # HH total del día = total personas × horas por persona
+    # HH del día: con el subform ya viene el total (suma de personas × horas por
+    # frente); sin él se conserva el cálculo antiguo (personal en campo × horas).
     _total_personas = int(cal_region) + int(cal_no_region) + int(no_cal_region) + int(no_cal_no_region)
-    _hh_total = _total_personas * hh_dia
+    _hh_total = hh_dia if hh_rows else _total_personas * hh_dia
 
     # ── Avance real acumulado ──────────────────────────────────────────────────
     # Formula: row9(date_col) = sum(qty*precio)/I13 ; row8 = row9 + row8_prev
@@ -1087,6 +1119,7 @@ if generar:
         "maquinaria":                       int(maquinaria),
         "equipo":                           int(equipo),
         "hh_dia":                           _hh_total,   # Total HH del día para la hoja HSE
+        "horas_por_ubicacion":              horas_por_ubicacion,  # reparto en Recursos
         "hse_accid_cpt":                    int(hse_accid_cpt),
         "hse_accid_spt":                    int(hse_accid_spt),
         "hse_primeros_aux":                 int(hse_primeros),
